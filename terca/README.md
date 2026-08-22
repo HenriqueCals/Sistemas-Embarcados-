@@ -1,26 +1,21 @@
-Requisitos
-
-Detectar a temperatura da comida dentro do micro-ondas em tempo real por meio de sensor de temperatura.
-Capturar a imagem da comida e classificar o tipo de alimento para estimar a temperatura-alvo ideal de consumo.
-Calcular automaticamente o tempo de aquecimento necessário com base na temperatura atual e na temperatura-alvo do alimento.
-Interromper o aquecimento automaticamente quando a comida atingir a temperatura-alvo (controle em malha fechada).
-Exibir na tela o tipo de alimento detectado, a temperatura atual e o tempo restante de aquecimento.
-Aprender/registrar as temperaturas-alvo dos alimentos mais frequentes para melhorar as recomendações ao longo do uso.
-
-Componentes
-
-Sensor de temperatura sem contato (ex.: sensor infravermelho MLX90614) para medir a temperatura da comida.
-Câmera/módulo de imagem (ex.: ESP32-CAM ou OV2640) para capturar a foto do alimento.
-Display para mostrar tipo de alimento, temperatura e tempo (ex.: OLED ou LCD).
-Microcontrolador com capacidade de processamento de imagem (ex.: ESP32) para ler os sensores, rodar a classificação e controlar o display.
-Módulo de relé para acionar e interromper o aquecimento do micro-ondas.
-Protoboard, jumpers e resistores para montagem do protótipo.
-
-Especificações
-
-Faixa de temperatura da comida suportada (ex.: 0 °C a 100 °C).
-Precisão da medição de temperatura (ex.: ±X °C).
-Tempo máximo de aquecimento por ciclo (ex.: X minutos).
-Display legível com atualização em tempo real da temperatura, tipo de alimento e tempo restante.
-Classificação de imagem capaz de reconhecer os principais tipos de alimento do usuário.
-Baixo custo de montagem, priorizando componentes acessíveis para o protótipo.
+- **Requisitos**
+  - Detectar a temperatura da comida dentro do micro-ondas em tempo real por meio de sensor de temperatura.
+  - Capturar a imagem da comida e classificar o tipo de alimento para estimar a temperatura-alvo ideal de consumo.
+  - Calcular automaticamente o tempo de aquecimento necessário com base na temperatura atual e na temperatura-alvo do alimento.
+  - Interromper o aquecimento automaticamente quando a comida atingir a temperatura-alvo (controle em malha fechada).
+  - Exibir na tela o tipo de alimento detectado, a temperatura atual e o tempo restante de aquecimento.
+  - Aprender/registrar as temperaturas-alvo dos alimentos mais frequentes para melhorar as recomendações ao longo do uso.
+- **Componentes**
+  - Sensor de temperatura sem contato (ex.: sensor infravermelho MLX90614) para medir a temperatura da comida.
+  - Câmera/módulo de imagem (ex.: ESP32-CAM ou OV2640) para capturar a foto do alimento.
+  - Display para mostrar tipo de alimento, temperatura e tempo (ex.: OLED ou LCD).
+  - Microcontrolador com capacidade de processamento de imagem (ex.: ESP32) para ler os sensores, rodar a classificação e controlar o display.
+  - Módulo de relé para acionar e interromper o aquecimento do micro-ondas.
+  - Protoboard, jumpers e resistores para montagem do protótipo.
+- **Especificações**
+  - Faixa de temperatura da comida suportada (ex.: 0 °C a 100 °C).
+  - Precisão da medição de temperatura (ex.: ±X °C).
+  - Tempo máximo de aquecimento por ciclo (ex.: X minutos).
+  - Display legível com atualização em tempo real da temperatura, tipo de alimento e tempo restante.
+  - Classificação de imagem capaz de reconhecer os principais tipos de alimento do usuário.
+  - Baixo custo de montagem, priorizando componentes acessíveis para o protótipo.
