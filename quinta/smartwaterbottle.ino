@@ -13,14 +13,77 @@ const float PESO_MINIMO = 250.00;
 const float LIMITE_LEVE = 10000.00;
 const float LIMITE_MEDIO = 25000.00;
 
+const float VARIACAO_MINIMA = 300.00;
+const unsigned long TEMPO_ESTABILIZACAO = 2000;
+
 HX711 scale;
 
 float calibration_factor = 1.0;
+
+float leituraReferencia = 0;
+bool temReferencia = false;
+bool copoFoiRetirado = false;
+float totalConsumido = 0;
+
+float ultimaLeitura = 0;
+unsigned long inicioEstavel = 0;
+
+float paraMl(float peso) {
+  return (peso / 100) - 5;
+}
 
 void apagarLeds() {
   digitalWrite(LED_LEVE, LOW);
   digitalWrite(LED_MEDIO, LOW);
   digitalWrite(LED_ALTO, LOW);
+}
+
+void registrarConsumo(float peso) {
+  if (peso < PESO_MINIMO || paraMl(peso) < 0) {
+    if (temReferencia) {
+      copoFoiRetirado = true;
+    }
+    ultimaLeitura = peso;
+    inicioEstavel = millis();
+    return;
+  }
+
+  if (abs(peso - ultimaLeitura) > VARIACAO_MINIMA) {
+    inicioEstavel = millis();
+  }
+  ultimaLeitura = peso;
+
+  if (millis() - inicioEstavel < TEMPO_ESTABILIZACAO) {
+    return;
+  }
+
+  if (!temReferencia) {
+    leituraReferencia = peso;
+    temReferencia = true;
+    Serial.print("Peso inicial registrado: ");
+    Serial.print(paraMl(peso), 2);
+    Serial.println(" ml");
+    return;
+  }
+
+  if (!copoFoiRetirado) {
+    return;
+  }
+
+  float diferenca = leituraReferencia - peso;
+
+  if (diferenca > VARIACAO_MINIMA) {
+    float bebido = diferenca / 100;
+    totalConsumido += bebido;
+    Serial.print("Bebeu: ");
+    Serial.print(bebido, 2);
+    Serial.println(" ml");
+  } else if (diferenca < -VARIACAO_MINIMA) {
+    Serial.println("Copo reabastecido");
+  }
+
+  leituraReferencia = peso;
+  copoFoiRetirado = false;
 }
 
 void setup() {
@@ -52,7 +115,7 @@ void loop() {
     float peso = scale.get_units(5);
 
     Serial.print("Leitura: ");
-    Serial.print((peso/100)-5, 2);
+    Serial.print(paraMl(peso), 2);
     Serial.print(" ml -> ");
 
     apagarLeds();
@@ -73,6 +136,12 @@ void loop() {
         Serial.println("ALTO");
       }
     }
+
+    registrarConsumo(peso);
+
+    Serial.print("Total de agua consumida: ");
+    Serial.print(totalConsumido, 2);
+    Serial.println(" ml");
   } else {
     Serial.println("HX711 not found.");
     apagarLeds();
