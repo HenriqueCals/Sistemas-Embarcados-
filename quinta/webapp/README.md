@@ -71,7 +71,7 @@ O `quinta/README.md` descreve uma versão **planejada e mais ambiciosa** do que 
 | Meta diária | ⚠️ Só no webapp: valor fixo editável, sem cálculo automático |
 | Lembretes por tempo sem beber | ❌ Não implementado (o buzzer só toca no nível LEVE) |
 | Exibir em tela | ✅ Via webapp (não há display físico) |
-| Reset diário automático | ⚠️ Só a lista de eventos do webapp; o total do Arduino não zera |
+| Reset diário automático | ⚠️ Só a lista de eventos do webapp; o total do Arduino fica salvo na EEPROM e não zera |
 
 ### Hardware real (conforme o `.ino`)
 
@@ -82,7 +82,7 @@ O `quinta/README.md` descreve uma versão **planejada e mais ambiciosa** do que 
 | LED "leve" | 4 | Aceso quando o nível está baixo |
 | LED "médio" | 3 | Aceso quando o nível está médio |
 | LED "alto" | 2 | Aceso quando o nível está alto |
-| Buzzer | 6 | Bipe de 1000 Hz por 100 ms a cada leitura com nível LEVE (≈ a cada 500 ms) |
+| Buzzer | 6 | Bipe de 1000 Hz por 100 ms ao entrar no nível LEVE e depois a cada 30 s enquanto continuar LEVE (não bipa com volume negativo) |
 | (opcional) módulo BLE HM-10 | TX/RX (0/1) | Só para o webapp via Bluetooth. Não está no `.ino` porque é transparente |
 
 Não há Wi-Fi, BLE ou display no firmware. **A única saída de dados é `Serial` a 9600 baud, em texto.**
@@ -109,7 +109,7 @@ gole (ml) = diferença_de_peso / 100   // o offset -5 se cancela
 Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `registrarConsumo` também trata isso como "retirado".
 
 **Ciclo do `loop()`** (a cada ~500 ms):
-1. Lê o peso, imprime a leitura e o nível, e acende o LED correspondente. No nível LEVE, também bipa.
+1. Espera o HX711 ficar pronto (até 1 s; se não ficar, imprime `HX711 not found.`), lê o peso, imprime a leitura e o nível, e acende o LED correspondente. No nível LEVE, bipa ao entrar no nível e depois a cada 30 s.
 2. Chama `registrarConsumo(peso)`.
 3. Imprime o total consumido.
 
@@ -123,7 +123,9 @@ Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `regis
    - Em qualquer caso, atualiza a referência e limpa `copoFoiRetirado`.
 5. Variações com o recipiente **sem sair da base** são ignoradas.
 
-**Estado volátil:** `totalConsumido` fica só na RAM, então zera ao reiniciar o Arduino. Não há EEPROM nem RTC.
+**Persistência:** `totalConsumido` é salvo na EEPROM a cada gole e recuperado no `setup()`, então sobrevive a resets e quedas de energia. Não há RTC, então não há reset diário.
+
+**Tara na inicialização:** o `setup()` avisa na Serial e pisca os LEDs por 5 s para a garrafa ser retirada antes do `tare()`. Se ela continuar na base, o peso dela vira o zero e as medições ficam erradas.
 
 ### Contrato de saída Serial (o que o webapp depende)
 
@@ -167,7 +169,7 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 **Ideias de evolução** (nenhuma implementada):
 - Calibrar o HX711 (`calibration_factor`) e trocar `paraMl()` por uma conversão em gramas, com 1 g ≈ 1 mL.
 - Adicionar sensor de temperatura e a capacidade da garrafa, para mostrar a %. Isso exigiria novas linhas na Serial e novas regras no parser.
-- Persistir `totalConsumido` na EEPROM e/ou usar um RTC para o reset diário.
+- Usar um RTC para o reset diário (e um comando para zerar o total salvo na EEPROM).
 - Lembretes de hidratação, no buzzer e/ou como notificação no webapp.
 - Mover o BLE para `SoftwareSerial`, para usar USB e Bluetooth ao mesmo tempo.
 - Migrar para ESP32 (BLE ou Wi-Fi nativos) e emitir JSON.
@@ -358,7 +360,7 @@ O modo demo é uma **tradução direta da lógica do `.ino` para JavaScript**:
 - Usa as mesmas constantes: `PESO_MINIMO = 250`, `LIMITE_LEVE = 10000`, `LIMITE_MEDIO = 25000`, `VARIACAO_MINIMA = 300`, `TEMPO_ESTABILIZACAO = 2000 ms`.
 - Usa a mesma conversão: `paraMl(peso) = peso / 100 - 5`.
 - Reimplementa `registrarConsumo()`: referência inicial, detecção de garrafa retirada, espera de estabilização, cálculo do gole (`diferenca / 100`) e reabastecimento.
-- A cada 500 ms (como o `delay(500)` do `loop()`), gera um peso simulado com ruído e **imprime as mesmas linhas** que o Arduino imprimiria.
+- A cada 500 ms (como o `INTERVALO_LEITURA` do `loop()`), gera um peso simulado com ruído e **imprime as mesmas linhas** que o Arduino imprimiria.
 
 Essas linhas passam pelo mesmo parser usado com o hardware real. Assim, o modo demo também serve de teste do parser.
 
