@@ -239,7 +239,9 @@
   /* ---------- Estado ---------- */
   const today = () => new Date().toISOString().slice(0, 10);
   const state = {
-    total: 0,
+    total: 0,               // consumo exibido = rawTotal - base
+    rawTotal: null,         // total acumulado que o Arduino envia (null = ainda sem leitura)
+    base: store.get('totalBase', 0),   // valor do Arduino no último "Zerar consumo" (só neste aparelho)
     now: null,
     level: '',
     lastSip: null,          // { ml, at }
@@ -256,6 +258,7 @@
     if (sip) state.lastSip = sip;
   }
   const persist = () => store.set('day', { date: today(), events: state.events.slice(0, 200) });
+  function setBase(v) { state.base = v; store.set('totalBase', v); }
 
   /* ---------- Parser da saída Serial do .ino ---------- */
   const num = (s) => parseFloat(s);
@@ -266,14 +269,25 @@
       state.level = lvl === 'VAZIO' ? 'VAZIO' : lvl;
       state.now = lvl === 'VAZIO' ? null : Math.max(0, num(m[1]));
     }],
-    [/^Total de agua consumida:\s*(-?[\d.]+)/i, (m) => { state.total = Math.max(0, num(m[1])); }],
+    [/^Total de agua consumida:\s*(-?[\d.]+)/i, (m) => {
+      const raw = Math.max(0, num(m[1]));
+      state.rawTotal = raw;
+      if (conn && conn.kind === 'demo') { state.total = raw; return; }   // demo não mexe na base real
+      // O total do Arduino caiu abaixo da base: ele foi zerado lá (ZERAR, EEPROM apagada).
+      if (raw < state.base) setBase(0);
+      state.total = raw - state.base;
+    }],
     [/^Bebeu:\s*([\d.]+)/i, (m) => addEvent({ type: 'sip', ml: num(m[1]) })],
     [/^Copo reabastecido/i, () => addEvent({ type: 'refill' })],
     [/^Peso inicial registrado:\s*(-?[\d.]+)/i, (m) => addEvent({ type: 'start', ml: num(m[1]) })],
     [/HX711 not found/i, () => { state.hx711Missing = true; state.now = null; state.level = ''; state.taring = false; }],
     [/^Retire a garrafa da base/i, () => { state.taring = true; }],
     [/^Balanca zerada/i, () => { state.taring = false; addEvent({ type: 'tare' }); }],
-    [/^Total zerado/i, () => { state.total = 0; addEvent({ type: 'reset' }); }],
+    [/^Total zerado/i, () => {
+      state.rawTotal = 0; state.total = 0;
+      if (!conn || conn.kind !== 'demo') setBase(0);
+      addEvent({ type: 'reset' });
+    }],
   ];
 
   let buf = '';
@@ -373,16 +387,17 @@
     render();
   };
 
-  // O total consumido fica na EEPROM do Arduino, então zerar é um comando para ele.
-  $('resetBtn').onclick = async () => {
-    if (!conn) return;
-    if (!confirm('Zerar o consumo de hoje? O total salvo no Arduino volta para 0 ml.')) return;
-    try {
-      await conn.send('ZERAR\n');
-    } catch (e) {
-      console.error(e);
-      alert('Não foi possível enviar o comando ao Arduino.');
-    }
+  // Zerar é feito no próprio app: o total atual do Arduino vira a nova base e o
+  // consumo exibido passa a contar a partir dela. Nada é enviado ao Arduino, então
+  // funciona mesmo sem a Serial de entrada (RX) e pela conexão remota.
+  $('resetBtn').onclick = () => {
+    if (state.rawTotal === null) return;
+    if (!confirm('Zerar o consumo? O app passa a contar a partir de agora.')) return;
+    if (conn && conn.kind === 'demo') { conn.send('ZERAR\n'); return; }   // a simulação zera o próprio total
+    setBase(state.rawTotal);
+    state.total = 0;
+    addEvent({ type: 'reset' });
+    render();
   };
   $('clearBtn').onclick = () => { state.events = []; state.lastSip = null; persist(); render(); };
 
@@ -400,12 +415,12 @@
     $('remoteNote').hidden = !(conn && conn.kind === 'mqtt' && conn.bridge === false);
     $('disconnectBox').hidden = !conn;
     $('btnTare').disabled = !conn || state.taring;
-    $('resetBtn').disabled = !conn || state.taring;
-    $('resetBtn').title = conn ? '' : 'Conecte ao Arduino para zerar';
+    $('resetBtn').disabled = state.rawTotal === null;
+    $('resetBtn').title = state.rawTotal === null ? 'Conecte para receber o total antes de zerar' : '';
     $('tareNote').hidden = !state.taring;
     $('tareNote').textContent = state.taring ? 'Retire a garrafa da base: a balança será zerada em 5 segundos…' : '';
   }
-  function setConn(c) { conn = c; state.lastLineAt = Date.now(); state.taring = false; buf = ''; render(); }
+  function setConn(c) { conn = c; state.lastLineAt = Date.now(); state.taring = false; state.rawTotal = null; buf = ''; render(); }
   function lost() { conn = null; state.taring = false; render(); }
 
   // Tara sob demanda: o Arduino guarda o zero na EEPROM e não refaz a tara ao ligar.

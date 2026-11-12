@@ -76,7 +76,7 @@ O `quinta/README.md` descreve uma versão **planejada e mais ambiciosa** do que 
 | Meta diária | ⚠️ Só no webapp: valor fixo editável, sem cálculo automático |
 | Lembretes por tempo sem beber | ❌ Não implementado (o buzzer só toca no nível LEVE) |
 | Exibir em tela | ✅ Via webapp (não há display físico) |
-| Reset diário automático | ⚠️ Não é automático: use **Zerar consumo** no webapp (comando `ZERAR`), que zera o total salvo na EEPROM |
+| Reset diário automático | ⚠️ Não é automático: use **Zerar consumo** no webapp, que zera o consumo exibido no próprio app (veja abaixo) |
 
 ### Hardware real (conforme o `.ino`)
 
@@ -147,7 +147,7 @@ Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `garra
 
 **Refazer a tara:** envie `TARA` + nova linha pela Serial (botão **Zerar balança** no webapp, ou pelo Serial Monitor). O Arduino avisa na Serial, pisca os LEDs por 5 s para a garrafa ser retirada, faz o `tare()`, salva o novo zero e imprime `Balanca zerada`. Se a garrafa continuar na base, o peso dela vira o zero e as medições ficam erradas. A referência de consumo é refeita depois da tara, mas o total consumido não muda.
 
-**Zerar o consumo:** envie `ZERAR` + nova linha (botão **Zerar consumo** no webapp). O Arduino zera `totalConsumido`, salva na EEPROM e imprime `Total zerado`. A referência de peso continua valendo.
+**Zerar o consumo pelo Arduino:** envie `ZERAR` + nova linha pelo Serial Monitor. O Arduino zera `totalConsumido`, salva na EEPROM e imprime `Total zerado`. A referência de peso continua valendo. O botão **Zerar consumo** do webapp **não** usa mais esse comando: o zero é feito no próprio app (veja [Zerar consumo no app](#zerar-consumo-no-app)).
 
 **Meta diária:** fica só no webapp (salva no navegador) e é alterada pelo botão **Alterar meta**, entre 100 e 10.000 ml. O Arduino não conhece a meta.
 
@@ -199,7 +199,7 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 **Ideias de evolução** (nenhuma implementada):
 - Calibrar o HX711 (`calibration_factor`) e trocar `paraMl()` por uma conversão em gramas, com 1 g ≈ 1 mL.
 - Adicionar sensor de temperatura e a capacidade da garrafa, para mostrar a %. Isso exigiria novas linhas na Serial e novas regras no parser.
-- Usar um RTC para o reset diário automático (hoje o total é zerado pelo comando `ZERAR`).
+- Reset diário automático, no app (base trocada na virada do dia) ou com um RTC no Arduino.
 - Lembretes de hidratação, no buzzer e/ou como notificação no webapp.
 - Mover o BLE para `SoftwareSerial`, para usar USB e Bluetooth ao mesmo tempo.
 - Migrar para ESP32 (BLE ou Wi-Fi nativos) e emitir JSON.
@@ -396,7 +396,7 @@ As demais linhas (`Initializing the scale...`, `read: ...`, `Variacao implausive
 - A MQTT.js (`mqtt@5.10.1`, via unpkg) é carregada na primeira conexão.
 - Ao abrir o app com `#url=…&id=…[&user=…]` (o link mostrado pela ponte), a configuração é salva, o fragmento é removido do endereço e o app conecta. Se houver usuário mas ainda não houver senha salva, abre o formulário para digitá-la.
 - Assina `garrafa/<id>/serial`, cujo payload vai direto para o `feed()`, e `garrafa/<id>/status` (`online`/`offline`, retido), que mostra o aviso de ponte offline.
-- Os comandos `TARA` e `ZERAR` são publicados em `garrafa/<id>/cmd` (QoS 1). A ponte os escreve na Serial.
+- O comando `TARA` é publicado em `garrafa/<id>/cmd` (QoS 1), e a ponte o escreve na Serial. A ponte também aceita `ZERAR`, mas o app não o envia mais.
 - Se a rede cair, a biblioteca reconecta sozinha a cada 3 s, e o indicador fica em "Aguardando dados…" enquanto isso. Se a primeira conexão falhar (endereço ou senha errados), o app mostra o erro e não fica tentando.
 
 **Detecção de suporte**: se o navegador não tiver Web Serial ou Web Bluetooth, o botão correspondente fica desabilitado e uma nota explica o motivo: falta de HTTPS ou navegador incompatível.
@@ -422,6 +422,15 @@ Usa o `localStorage` do navegador, apenas no próprio aparelho:
 | `goal` | Meta diária em ml. |
 | `day` | `{ date, events }`: eventos do dia (até 200). Se a data mudar, a lista recomeça. |
 | `mqtt` | `{ url, user, pass, id }`: configuração da conexão remota. |
+| `totalBase` | Total do Arduino no momento do último **Zerar consumo**. O consumo exibido é `total do Arduino − totalBase`. |
+
+#### Zerar consumo no app
+
+O botão **Zerar consumo** não envia nada ao Arduino. Ele guarda o total atual do Arduino como base (`totalBase`), e o anel passa a mostrar `total do Arduino − base`. Por isso funciona por qualquer conexão (USB, Bluetooth, remoto), mesmo quando a Serial de entrada do Arduino (RX) não recebe comandos.
+
+- A base é **por aparelho**: zerar no iPhone não zera no navegador do PC.
+- Se o total do Arduino ficar menor que a base (ele foi zerado com `ZERAR` ou a EEPROM foi apagada), a base volta a 0 automaticamente.
+- No modo demonstração, o botão zera o total simulado e não mexe na base real.
 
 O botão **Limpar** apaga os eventos do dia.
 
