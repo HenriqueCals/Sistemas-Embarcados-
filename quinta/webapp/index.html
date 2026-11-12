@@ -124,6 +124,14 @@
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn:active:not(:disabled) { transform: scale(.985); }
   .note { font-size: 12px; color: var(--muted); text-align: center; margin: 2px 0 0; }
+  .note.warn { color: var(--warn); }
+  .mqtt-form { display: flex; flex-direction: column; gap: 10px; }
+  .mqtt-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .mqtt-form input {
+    font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%;
+  }
+  .mqtt-form .row { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
@@ -185,10 +193,34 @@
   <section class="connect" id="connectBox">
     <button class="btn" id="btnBle">Conectar via Bluetooth</button>
     <button class="btn ghost" id="btnUsb">Conectar via USB</button>
+    <button class="btn ghost" id="btnMqtt">Conectar remoto (MQTT)</button>
     <button class="btn ghost" id="btnDemo">Modo demonstração</button>
     <p class="note" id="supportNote"></p>
+    <button class="link" id="mqttCfgBtn" type="button">Configurar conexão remota</button>
   </section>
+  <form class="card mqtt-form" id="mqttForm" hidden autocomplete="off">
+    <div class="label">Conexão remota (MQTT)</div>
+    <button class="chip" id="mqttPublic" type="button">Usar broker público (EMQX, sem cadastro)</button>
+    <label>Endereço do broker (WebSocket seguro)
+      <input id="mqttUrl" type="url" required placeholder="wss://xxxx.s1.eu.hivemq.cloud:8884/mqtt" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </label>
+    <label>Usuário
+      <input id="mqttUser" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </label>
+    <label>Senha
+      <input id="mqttPass" type="password">
+    </label>
+    <label>ID da garrafa (aparece ao iniciar a ponte)
+      <input id="mqttId" required pattern="[A-Za-z0-9_\-]+" placeholder="garrafa-xxxxxxxxxx" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </label>
+    <div class="row">
+      <button class="btn">Salvar e conectar</button>
+      <button class="btn ghost" id="mqttCancel" type="button" style="width:auto">Cancelar</button>
+    </div>
+    <p class="note">Os dados ficam salvos só neste aparelho.</p>
+  </form>
   <section class="connect" id="disconnectBox" hidden>
+    <p class="note warn" id="remoteNote" hidden>A ponte no PC está offline. Confira se o <b>ponte.py</b> está rodando e o Arduino conectado.</p>
     <button class="btn ghost" id="btnTare">Zerar balança (tara)</button>
     <p class="note" id="tareNote" hidden></p>
     <button class="btn ghost" id="btnOff">Desconectar</button>
@@ -361,9 +393,11 @@
     const pill = $('pill');
     const stale = conn && Date.now() - state.lastLineAt > 5000;
     pill.className = 'pill' + (conn ? (stale ? ' stale' : ' on') : '');
-    const names = { usb: 'USB', ble: 'Bluetooth', demo: 'Demo' };
+    const names = { usb: 'USB', ble: 'Bluetooth', demo: 'Demo', mqtt: 'Remoto' };
     $('pillText').textContent = !conn ? 'Desconectado' : stale ? 'Aguardando dados…' : names[conn.kind];
     $('connectBox').hidden = !!conn;
+    if (conn) $('mqttForm').hidden = true;
+    $('remoteNote').hidden = !(conn && conn.kind === 'mqtt' && conn.bridge === false);
     $('disconnectBox').hidden = !conn;
     $('btnTare').disabled = !conn || state.taring;
     $('resetBtn').disabled = !conn || state.taring;
@@ -395,7 +429,11 @@
   if (!hasSerial || !hasBle) {
     $('supportNote').textContent = !window.isSecureContext
       ? 'Abra o app via HTTPS ou localhost para habilitar USB e Bluetooth.'
-      : 'Use o Chrome (Android ou desktop) para USB e Bluetooth.';
+      : 'USB e Bluetooth só funcionam no Chrome (Android ou desktop). No iPhone, use a conexão remota.';
+  }
+  if (!hasBle) {   // ex.: iPhone — a conexão remota vira o botão principal
+    $('btnBle').classList.add('ghost');
+    $('btnMqtt').classList.remove('ghost');
   }
 
   // USB — Web Serial, 9600 baud como no Serial.begin(9600)
@@ -471,6 +509,120 @@
       });
     } catch (e) { if (e.name !== 'NotFoundError') { console.error(e); alertMsg('Falha ao conectar via Bluetooth.'); } }
   };
+
+  // Remoto — MQTT via WebSocket seguro. Do outro lado, a ponte (../ponte-mqtt/ponte.py)
+  // publica as linhas da Serial e repassa os comandos ao Arduino.
+  const MQTT_LIB = 'https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js';
+  const loadMqtt = () => window.mqtt ? Promise.resolve() : new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = MQTT_LIB;
+    s.onload = ok;
+    s.onerror = () => { s.remove(); fail(new Error('mqtt.js')); };
+    document.head.appendChild(s);
+  });
+
+  function mqttForm(open) {
+    $('mqttForm').hidden = !open;
+    if (!open) return;
+    const c = store.get('mqtt', {});
+    $('mqttUrl').value = c.url || '';
+    $('mqttUser').value = c.user || '';
+    $('mqttPass').value = c.pass || '';
+    $('mqttId').value = c.id || '';
+    $('mqttForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  // Broker público: sem cadastro nem senha. A privacidade vem só do ID aleatório da garrafa.
+  $('mqttPublic').onclick = () => {
+    $('mqttUrl').value = 'wss://broker.emqx.io:8084/mqtt';
+    $('mqttUser').value = '';
+    $('mqttPass').value = '';
+    $('mqttId').focus();
+  };
+  $('mqttCfgBtn').onclick = () => mqttForm($('mqttForm').hidden);
+  $('mqttCancel').onclick = () => mqttForm(false);
+  $('mqttForm').onsubmit = (e) => {
+    e.preventDefault();
+    const cfg = {
+      url: $('mqttUrl').value.trim(),
+      user: $('mqttUser').value.trim(),
+      pass: $('mqttPass').value,
+      id: $('mqttId').value.trim(),
+    };
+    store.set('mqtt', cfg);
+    mqttForm(false);
+    connectMqtt(cfg);
+  };
+  $('btnMqtt').onclick = () => {
+    const cfg = store.get('mqtt', null);
+    if (cfg && cfg.url && cfg.id) connectMqtt(cfg); else mqttForm(true);
+  };
+
+  // Link de configuração impresso pela ponte: ...webapp/#url=wss://...&id=garrafa-xxxx[&user=...]
+  // Salva a configuração, limpa o endereço e já conecta. A senha nunca vem no link.
+  (() => {
+    const h = new URLSearchParams(location.hash.slice(1));
+    const url = h.get('url'), id = h.get('id');
+    if (!url || !id) return;
+    history.replaceState(null, '', location.pathname + location.search);
+    const old = store.get('mqtt', {});
+    const user = h.get('user') || '';
+    const cfg = { url, id, user, pass: old.url === url && old.user === user ? old.pass || '' : '' };
+    store.set('mqtt', cfg);
+    if (user && !cfg.pass) { mqttForm(true); $('mqttPass').focus(); alertMsg('Digite a senha do broker para concluir.'); }
+    else connectMqtt(cfg);
+  })();
+
+  async function connectMqtt(cfg) {
+    const btn = $('btnMqtt');
+    const busy = (on) => { btn.disabled = on; btn.textContent = on ? 'Conectando…' : 'Conectar remoto (MQTT)'; };
+    busy(true);
+    alertMsg('');
+    try { await loadMqtt(); } catch {
+      busy(false);
+      alertMsg('Não foi possível carregar a biblioteca MQTT. Verifique a internet.');
+      return;
+    }
+    const base = `garrafa/${cfg.id}`;
+    const client = mqtt.connect(cfg.url, {
+      username: cfg.user || undefined,
+      password: cfg.pass || undefined,
+      clientId: 'webapp-' + Math.random().toString(16).slice(2, 10),
+      reconnectPeriod: 3000,
+      connectTimeout: 10000,
+    });
+    const dec = new TextDecoder();
+    let me = null, failed = false;
+    const fail = (msg) => {
+      if (me || failed) return;
+      failed = true;
+      client.end(true);
+      busy(false);
+      alertMsg(msg);
+    };
+    client.on('connect', () => {
+      client.subscribe([`${base}/serial`, `${base}/status`], { qos: 0 });
+      if (me) return;   // reconexão: a sessão continua a mesma
+      busy(false);
+      me = {
+        kind: 'mqtt',
+        bridge: null,   // null = ainda sem notícia da ponte
+        send: (text) => client.publishAsync(`${base}/cmd`, text.trim(), { qos: 1 }),
+        close() { client.end(true); },
+      };
+      setConn(me);
+    });
+    client.on('message', (topic, payload) => {
+      if (!me || conn !== me) return;
+      const text = dec.decode(payload);
+      if (topic.endsWith('/status')) { me.bridge = text === 'online'; render(); }
+      else feed(text);
+    });
+    client.on('error', (e) => {
+      console.error(e);
+      fail(/auth/i.test(e.message) ? 'Usuário ou senha do broker incorretos.' : 'Falha ao conectar ao broker MQTT.');
+    });
+    client.on('close', () => fail('Não foi possível conectar ao broker. Confira o endereço (wss://…:8884/mqtt).'));
+  }
 
   function alertMsg(msg) {
     const n = $('supportNote');

@@ -2,7 +2,7 @@
 
 Interface mobile, minimalista, que mostra em tempo real os dados calculados pelo `smartwaterbottle.ino`: volume atual na garrafa, nível (LEVE / MÉDIO / ALTO), goles detectados, reabastecimentos e total de água consumida.
 
-O app **não exige nenhuma alteração no código do Arduino**: ele lê exatamente o texto que o sketch já imprime na Serial (9600 baud) e o interpreta no navegador.
+O app **não exige nenhuma alteração no código do Arduino**: ele lê exatamente o texto que o sketch já imprime na Serial (9600 baud) e o interpreta no navegador. A conexão pode ser por USB, Bluetooth ou **remota via MQTT**, que funciona de qualquer lugar e também no iPhone (veja [`../ponte-mqtt/`](../ponte-mqtt/README.md)).
 
 ---
 
@@ -40,7 +40,8 @@ O app **não exige nenhuma alteração no código do Arduino**: ele lê exatamen
 - **Partes do projeto:**
   1. `quinta/smartwaterbottle.ino`: firmware do Arduino. É a **fonte da verdade** do comportamento.
   2. `quinta/webapp/`: webapp mobile que lê a Serial do Arduino e exibe os dados.
-  3. `quinta/README.md`: requisitos, componentes e especificações *planejados* para o projeto.
+  3. `quinta/ponte-mqtt/`: script Python que roda no PC ligado ao Arduino e repassa a Serial para um broker MQTT, para o uso remoto do webapp.
+  4. `quinta/README.md`: requisitos, componentes e especificações *planejados* para o projeto.
 
 ### Estrutura de arquivos
 
@@ -51,6 +52,10 @@ Sistemas-Embarcados-/
 └── quinta/
     ├── README.md               # requisitos/componentes planejados (ver ressalva abaixo)
     ├── smartwaterbottle.ino    # firmware real
+    ├── ponte-mqtt/
+    │   ├── ponte.py            # ponte Serial <-> MQTT (roda no PC)
+    │   ├── requirements.txt
+    │   └── README.md           # configuração do broker e da ponte
     └── webapp/
         ├── index.html          # app completo (HTML+CSS+JS, sem dependências)
         ├── manifest.webmanifest
@@ -176,7 +181,11 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 | Ignorar a lista de componentes do `quinta/README.md` | Pedido explícito do dono do projeto. O `.ino` é a referência |
 | Preservar o texto da Serial ao evoluir o `.ino` | O app lê exatamente essas linhas. A lógica de detecção pode mudar, mas as mensagens devem continuar iguais |
 | Webapp em HTML único, sem build nem frameworks | Simples de hospedar (GitHub Pages) e de manter numa disciplina |
-| Web Serial (USB) e Web Bluetooth (BLE UART) | São as únicas formas de um navegador falar com um Arduino sem Wi-Fi |
+| Web Serial (USB) e Web Bluetooth (BLE UART) | São as únicas formas de um navegador falar diretamente com um Arduino sem Wi-Fi |
+| Acesso remoto via ponte MQTT no PC | O Arduino não tem Wi-Fi e o Safari/iOS não tem Web Serial nem Web Bluetooth. Uma ponte Python publica a Serial num broker, e o app se conecta por `wss://`, sem mudar o firmware |
+| Broker público `broker.emqx.io` como padrão, com ID aleatório | O cadastro no HiveMQ Cloud se mostrou trabalhoso. O ID aleatório (salvo em `.garrafa-id`) é a única proteção, o que é aceitável para a disciplina. Com senha, use `--host`/`--user`/`--password` |
+| Link de configuração (`#url=…&id=…`) | Evita digitar endereço e ID no iPhone. Fica no fragmento, então não chega ao servidor, e nunca inclui a senha |
+| Biblioteca MQTT.js carregada sob demanda (unpkg) | Só é baixada ao tocar em *Conectar remoto*. USB, Bluetooth e demo continuam sem dependências externas |
 | Modo demonstração que replica a lógica do `.ino` | Permite testar e apresentar sem o hardware |
 | Meta diária só no app (padrão 2000 ml) | O firmware não tem esse conceito |
 | Interface em português (pt-BR), minimalista | Pedido do dono do projeto |
@@ -203,10 +212,11 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 
 | Item | Detalhe |
 |---|---|
-| Navegador | **Google Chrome** (Android ou desktop) ou outro baseado em Chromium (Edge, Opera). Safari/iOS e Firefox não suportam Web Serial nem Web Bluetooth. |
+| Navegador | Para USB e Bluetooth: **Google Chrome** (Android ou desktop) ou outro baseado em Chromium (Edge, Opera). Safari/iOS e Firefox não suportam Web Serial nem Web Bluetooth. A **conexão remota (MQTT)** funciona em qualquer navegador, inclusive o Safari do iPhone. |
 | Contexto seguro | A página precisa ser aberta via **HTTPS** ou **localhost**. Abrir o `index.html` direto do disco (`file://`) desabilita USB e Bluetooth. |
 | Para Bluetooth | Um módulo **BLE** de serial transparente (ex.: HM-10, AT-09, ou um ESP32 rodando Nordic UART). Módulos **HC-05/HC-06 não funcionam** — são Bluetooth clássico, e navegadores só acessam BLE. |
 | Para USB | Cabo USB do Arduino ligado ao computador, ou ao celular Android com adaptador OTG. |
+| Para remoto | O `ponte.py` rodando num PC ligado ao Arduino. O broker padrão é o público `broker.emqx.io` (sem cadastro); também serve um broker com senha e WebSocket seguro, como o HiveMQ Cloud. Veja [`../ponte-mqtt/README.md`](../ponte-mqtt/README.md). |
 
 ### Abrindo o app
 
@@ -214,7 +224,7 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 
 1. No GitHub, vá em *Settings → Pages* do repositório.
 2. Em *Source*, escolha a branch `main` e a pasta raiz.
-3. Acesse `https://<usuario>.github.io/<repositorio>/quinta/webapp/` no Chrome do celular.
+3. Acesse `https://<usuario>.github.io/<repositorio>/quinta/webapp/` no celular (Chrome para USB e Bluetooth; qualquer navegador para o modo remoto).
 
 **Opção B — servidor local (para testar no computador)**
 
@@ -255,6 +265,15 @@ Depois abra `http://localhost:3000` (serve) ou `http://localhost:8000` (python) 
 3. No app, toque em **Conectar via USB** e escolha a porta do Arduino.
 4. O indicador no topo muda para **USB** com um ponto verde.
 
+#### Via internet (MQTT), inclusive no iPhone
+
+1. Com o Arduino ligado por USB a um PC, rode a ponte: `python quinta/ponte-mqtt/ponte.py`. Por padrão ela usa o broker público `broker.emqx.io`, que não exige cadastro.
+2. A ponte mostra um **link de configuração**. Abra esse link no celular: o app salva os dados e já conecta.
+   - Alternativa: toque em **Configurar conexão remota → Usar broker público** e digite o ID da garrafa que a ponte mostrou.
+3. O indicador no topo muda para **Remoto**. Se a ponte estiver parada, aparece um aviso.
+
+O passo a passo completo, inclusive com um broker com senha (HiveMQ Cloud), está em [`../ponte-mqtt/README.md`](../ponte-mqtt/README.md).
+
 #### Desconectando
 
 Toque em **Desconectar**, no fim da tela.
@@ -265,7 +284,7 @@ Toque em **Modo demonstração** para ver o app funcionando sem hardware. Ele si
 
 ### Instalando no celular
 
-Com o app aberto no Chrome do Android, toque no menu ⋮ e depois em **Adicionar à tela inicial** (ou **Instalar app**). O app passa a abrir em tela cheia, como um aplicativo nativo.
+Com o app aberto no Chrome do Android, toque no menu ⋮ e depois em **Adicionar à tela inicial** (ou **Instalar app**). No iPhone, use o Safari: **Compartilhar → Adicionar à Tela de Início**. O app passa a abrir em tela cheia, como um aplicativo nativo. No iPhone, o app instalado tem armazenamento separado do Safari, então configure a conexão remota de novo dentro dele.
 
 ---
 
@@ -318,7 +337,7 @@ quinta/webapp/
 └── README.md             # Este documento
 ```
 
-O app é **um único arquivo HTML**, sem frameworks, sem etapa de build e sem bibliotecas externas. Funciona servido por qualquer servidor estático.
+O app é **um único arquivo HTML**, sem frameworks e sem etapa de build. Funciona servido por qualquer servidor estático. A única biblioteca externa é a MQTT.js, carregada só quando se usa a conexão remota.
 
 ### Como os dados chegam ao app
 
@@ -326,14 +345,15 @@ O app é **um único arquivo HTML**, sem frameworks, sem etapa de build e sem bi
 HX711 ──► Arduino (smartwaterbottle.ino)
               │  Serial.print(...) @ 9600 baud
               ├──► USB ─────────────► Web Serial API ─────┐
-              └──► módulo BLE (TX) ─► Web Bluetooth API ──┤
+              ├──► módulo BLE (TX) ─► Web Bluetooth API ──┤
+              └──► USB ► PC (ponte.py) ► broker MQTT ► MQTT.js (wss) ──┤
                                                           ▼
                                      parser de linhas (feed → handleLine)
                                                           ▼
                                             estado (state) → render()
 ```
 
-Independentemente do meio (USB, BLE ou demo), o texto recebido passa pela mesma função `feed()`. Ela acumula os pedaços em um buffer, separa por `\n` e envia cada linha completa para `handleLine()`.
+Independentemente do meio (USB, BLE, MQTT ou demo), o texto recebido passa pela mesma função `feed()`. Ela acumula os pedaços em um buffer, separa por `\n` e envia cada linha completa para `handleLine()`.
 
 ### Parser da Serial
 
@@ -372,6 +392,13 @@ As demais linhas (`Initializing the scale...`, `read: ...`, `Variacao implausive
 - As notificações recebidas são decodificadas com `TextDecoder` em modo streaming, para não quebrar caracteres entre pacotes, e enviadas ao `feed()`.
 - O evento `gattserverdisconnected` detecta quedas de conexão.
 
+**Remoto — MQTT sobre WebSocket**
+- A MQTT.js (`mqtt@5.10.1`, via unpkg) é carregada na primeira conexão.
+- Ao abrir o app com `#url=…&id=…[&user=…]` (o link mostrado pela ponte), a configuração é salva, o fragmento é removido do endereço e o app conecta. Se houver usuário mas ainda não houver senha salva, abre o formulário para digitá-la.
+- Assina `garrafa/<id>/serial`, cujo payload vai direto para o `feed()`, e `garrafa/<id>/status` (`online`/`offline`, retido), que mostra o aviso de ponte offline.
+- Os comandos `TARA` e `ZERAR` são publicados em `garrafa/<id>/cmd` (QoS 1). A ponte os escreve na Serial.
+- Se a rede cair, a biblioteca reconecta sozinha a cada 3 s, e o indicador fica em "Aguardando dados…" enquanto isso. Se a primeira conexão falhar (endereço ou senha errados), o app mostra o erro e não fica tentando.
+
 **Detecção de suporte**: se o navegador não tiver Web Serial ou Web Bluetooth, o botão correspondente fica desabilitado e uma nota explica o motivo: falta de HTTPS ou navegador incompatível.
 
 ### Modo demonstração (detalhes)
@@ -394,6 +421,7 @@ Usa o `localStorage` do navegador, apenas no próprio aparelho:
 |---|---|
 | `goal` | Meta diária em ml. |
 | `day` | `{ date, events }`: eventos do dia (até 200). Se a data mudar, a lista recomeça. |
+| `mqtt` | `{ url, user, pass, id }`: configuração da conexão remota. |
 
 O botão **Limpar** apaga os eventos do dia.
 
@@ -412,7 +440,8 @@ O botão **Limpar** apaga os eventos do dia.
 
 - **Total depende do Arduino**: o `totalConsumido` é calculado e salvo na EEPROM pelo Arduino, e o app só exibe o valor recebido.
 - **Sem reset diário no Arduino**: o total só zera quando o Arduino reinicia. O app zera a lista de eventos a cada dia, mas o número do anel é o que o Arduino envia.
-- **iPhone/iOS**: o Safari não suporta Web Serial nem Web Bluetooth. Em iOS seria necessário um app nativo ou um navegador como o Bluefy (só para BLE).
+- **iPhone/iOS**: o Safari não suporta Web Serial nem Web Bluetooth. No iPhone, use a **conexão remota (MQTT)**, que exige um PC ligado ao Arduino rodando a ponte.
+- **Remoto depende do PC**: a ponte precisa ficar rodando num PC conectado ao Arduino por USB. Enquanto isso, a porta fica ocupada, e o USB do webapp e o Monitor Serial não funcionam nesse PC.
 - **Pinos 0/1 compartilhados**: com o módulo BLE nos pinos 0/1, USB e Bluetooth disputam a mesma Serial. Para usar os dois, seria preciso mover o BLE para `SoftwareSerial` e duplicar os `print` no `.ino`.
 - **Não testado com hardware real** até o momento. A validação foi feita via modo demonstração.
 
@@ -422,7 +451,11 @@ O botão **Limpar** apaga os eventos do dia.
 
 | Sintoma | Causa provável | Solução |
 |---|---|---|
-| Botões USB/Bluetooth desabilitados | Página aberta via `file://` ou navegador incompatível | Sirva via HTTPS ou localhost e use o Chrome. |
+| Botões USB/Bluetooth desabilitados | Página aberta via `file://` ou navegador incompatível | Sirva via HTTPS ou localhost e use o Chrome. No iPhone, use a conexão remota. |
+| "Não foi possível conectar ao broker" | Endereço errado, ou uso de `ws://` / porta 8883 no app | Use `wss://<cluster>:8884/mqtt` (a 8883 é só para a ponte). |
+| "Usuário ou senha do broker incorretos" | Credencial errada | Confira em *Configurar conexão remota*. |
+| Remoto conectado, mas "A ponte no PC está offline" | `ponte.py` parado ou Arduino desconectado do PC | Rode a ponte e confira o cabo. |
+| Remoto conectado, mas sempre "Aguardando dados…" | ID da garrafa diferente do `--id` da ponte | Use o mesmo ID nos dois lados. |
 | Módulo não aparece na lista Bluetooth | É um HC-05/HC-06 (Bluetooth clássico) | Troque por um módulo BLE (HM-10 ou similar). |
 | "Dispositivo sem serviço UART compatível" | O módulo usa UUIDs diferentes | Adicione os UUIDs do módulo em `BLE_UARTS` no `index.html`. |
 | Conecta, mas fica em "Aguardando dados…" | Baud rate do módulo BLE diferente de 9600, ou TX/RX invertidos | Configure o módulo para 9600 (`AT+BAUD4` no HM-10) e confira a fiação. |
