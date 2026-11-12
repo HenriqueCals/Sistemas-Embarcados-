@@ -414,36 +414,81 @@
 
   /* ---------- Modo demo: replica a lógica do smartwaterbottle.ino ---------- */
   $('btnDemo').onclick = () => {
-    const PESO_MINIMO = 250, LIMITE_LEVE = 10000, LIMITE_MEDIO = 25000, VARIACAO_MINIMA = 300, TEMPO_ESTAB = 2000;
+    const PESO_MINIMO = 250, LIMITE_LEVE = 10000, LIMITE_MEDIO = 25000;
+    const JANELA = 6, TOLERANCIA_ESTAVEL = 150, LIMIAR_GOLE = 500, LIMIAR_REABASTECER_NA_BASE = 2000;
+    const DIFERENCA_MAXIMA = 100000, TEMPO_MIN_FORA = 1000, BANDA_ZERO = 200, GANHO_ZERO = 0.5;
+    const AMOSTRAS_MEDIANA = 5;
     const paraMl = (p) => p / 100 - 5;
-    let ref = 0, temRef = false, retirado = false, total = 0, ultima = 0, inicio = Date.now();
+    const naBase = (p) => p >= PESO_MINIMO && paraMl(p) >= 0;
+    let estado = 'SEM_REFERENCIA', ref = 0, total = 0, inicioFora = 0, ultimoFora = 0;
+    let janela = [], janelaComGarrafa = false;
+    let offset = 0, deriva = 0;   // zero simulado do HX711 (deriva térmica + auto-zero)
     let ml = 450, phase = 'on', ticks = 0;
     const out = (s) => feed(s + '\n');
 
+    // Média da janela se estável (max - min dentro da tolerância), senão null.
+    function mediaEstavel() {
+      if (janela.length < JANELA) return null;
+      const mn = Math.min(...janela), mx = Math.max(...janela);
+      return mx - mn <= TOLERANCIA_ESTAVEL ? janela.reduce((a, b) => a + b, 0) / JANELA : null;
+    }
+
+    function avaliarRetirada(media) {
+      const dif = ref - media;
+      if (Math.abs(dif) > DIFERENCA_MAXIMA) { out('Variacao implausivel ignorada'); ref = media; }
+      else if (dif > LIMIAR_GOLE) { const b = dif / 100; total += b; out(`Bebeu: ${b.toFixed(2)} ml`); ref = media; }
+      else if (dif < -LIMIAR_GOLE) { out('Copo reabastecido'); ref = media; }
+      // diferença pequena: mantém a referência para acumular goles pequenos
+    }
+
     function registrar(peso) {
-      if (peso < PESO_MINIMO || paraMl(peso) < 0) {
-        if (temRef) retirado = true;
-        ultima = peso; inicio = Date.now(); return;
+      const comGarrafa = naBase(peso);
+      if (comGarrafa !== janelaComGarrafa) { janela = []; janelaComGarrafa = comGarrafa; }
+      janela.push(peso);
+      if (janela.length > JANELA) janela.shift();
+      const media = mediaEstavel();
+
+      if (!comGarrafa) {
+        if (estado === 'NA_BASE') { estado = 'FORA_DA_BASE'; inicioFora = Date.now(); }
+        if (estado === 'FORA_DA_BASE') ultimoFora = Date.now();
+        if (media !== null && Math.abs(media) <= BANDA_ZERO) { offset += media * GANHO_ZERO; janela = []; }
+        return;
       }
-      if (Math.abs(peso - ultima) > VARIACAO_MINIMA) inicio = Date.now();
-      ultima = peso;
-      if (Date.now() - inicio < TEMPO_ESTAB) return;
-      if (!temRef) { ref = peso; temRef = true; out(`Peso inicial registrado: ${paraMl(peso).toFixed(2)} ml`); return; }
-      if (!retirado) return;
-      const dif = ref - peso;
-      if (dif > VARIACAO_MINIMA) { const b = dif / 100; total += b; out(`Bebeu: ${b.toFixed(2)} ml`); }
-      else if (dif < -VARIACAO_MINIMA) out('Copo reabastecido');
-      ref = peso; retirado = false;
+      if (media === null) return;
+
+      if (estado === 'SEM_REFERENCIA') {
+        ref = media; estado = 'NA_BASE';
+        out(`Peso inicial registrado: ${paraMl(media).toFixed(2)} ml`);
+        return;
+      }
+      if (estado === 'FORA_DA_BASE') {
+        estado = 'NA_BASE';
+        if (ultimoFora - inicioFora >= TEMPO_MIN_FORA) { avaliarRetirada(media); return; }
+        // retirada curta demais: tranco, segue como se não tivesse saído
+      }
+      if (media - ref > LIMIAR_REABASTECER_NA_BASE) { out('Copo reabastecido'); ref = media; }
+    }
+
+    // Simula lerMediana(): 5 amostras com ruído e picos ocasionais, devolve a mediana.
+    function lerMediana(real) {
+      const amostras = [];
+      for (let i = 0; i < AMOSTRAS_MEDIANA; i++) {
+        const pico = Math.random() < 0.05 ? (Math.random() - 0.5) * 6000 : 0;
+        amostras.push(real + deriva - offset + (Math.random() - 0.5) * 60 + pico);
+      }
+      amostras.sort((a, b) => a - b);
+      return amostras[AMOSTRAS_MEDIANA >> 1];
     }
 
     const timer = setInterval(() => {
       ticks++;
+      deriva += 2;   // o zero da célula de carga deriva devagar
       if (phase === 'on' && ticks > 14) { phase = 'off'; ticks = 0; }
-      else if (phase === 'off' && ticks > 4) {
+      else if (phase === 'off' && ticks > 8) {
         phase = 'on'; ticks = 0;
         ml = ml < 120 ? 500 : ml - (25 + Math.random() * 70);
       }
-      const peso = phase === 'off' ? Math.random() * 40 : (ml + 5) * 100 + (Math.random() - 0.5) * 60;
+      const peso = lerMediana(phase === 'off' ? 0 : (ml + 5) * 100);
       const lvl = peso < PESO_MINIMO ? 'vazio' : peso < LIMITE_LEVE ? 'LEVE' : peso < LIMITE_MEDIO ? 'MEDIO' : 'ALTO';
       out(`Leitura: ${paraMl(peso).toFixed(2)} ml -> ${lvl}`);
       registrar(peso);

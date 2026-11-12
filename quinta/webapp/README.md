@@ -89,7 +89,7 @@ Não há Wi-Fi, BLE ou display no firmware. **A única saída de dados é `Seria
 
 ### Como o firmware funciona
 
-**Unidades.** `calibration_factor = 1.0`, então `scale.get_units(5)` devolve o valor **bruto** do HX711 após a tara (média de 5 leituras). O código chama esse valor de `peso`. A conversão para mL é empírica:
+**Unidades.** `calibration_factor = 1.0`, então `scale.get_units()` devolve o valor **bruto** do HX711 após a tara. Cada leitura é a **mediana de 5 amostras** (`lerMediana()`), que descarta picos isolados do sensor. O código chama esse valor de `peso`. A conversão para mL é empírica:
 
 ```
 ml = peso / 100 - 5        // paraMl()
@@ -103,25 +103,36 @@ gole (ml) = diferença_de_peso / 100   // o offset -5 se cancela
 | `PESO_MINIMO` | 250 | — | Abaixo disso, a base é considerada **vazia** (recipiente retirado) |
 | `LIMITE_LEVE` | 10000 | 95 | Abaixo disso, nível **LEVE** (LED 4 + buzzer) |
 | `LIMITE_MEDIO` | 25000 | 245 | Abaixo disso, **MEDIO** (LED 3). Acima, **ALTO** (LED 2) |
-| `VARIACAO_MINIMA` | 300 | 3 | Variação mínima para considerar mudança, gole ou reabastecimento |
-| `TEMPO_ESTABILIZACAO` | 2000 ms | — | Tempo que o peso precisa ficar estável para valer |
+| `JANELA_ESTABILIDADE` | 6 leituras | — | Janela de ~3 s usada para decidir se o peso está estável |
+| `TOLERANCIA_ESTAVEL` | 150 | 1,5 | Variação máxima (máx − mín) aceita dentro da janela |
+| `LIMIAR_GOLE` | 500 | 5 | Diferença mínima, após retirar e recolocar, para contar gole ou reabastecimento |
+| `LIMIAR_REABASTECER_NA_BASE` | 2000 | 20 | Subida mínima com a garrafa parada na base para contar reabastecimento |
+| `DIFERENCA_MAXIMA` | 100000 | 1000 | Acima disso a variação é implausível (troca de garrafa, objeto estranho) e é ignorada |
+| `TEMPO_MIN_FORA` | 1000 ms | — | Retiradas mais curtas são tratadas como tranco |
+| `BANDA_ZERO` | 200 | 2 | Com a base vazia e estável dentro dessa faixa, o zero é corrigido (auto-zero) |
 
-Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `registrarConsumo` também trata isso como "retirado".
+Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `garrafaNaBase()` também trata isso como "retirado".
 
 **Ciclo do `loop()`** (a cada ~500 ms):
-1. Espera o HX711 ficar pronto (até 1 s; se não ficar, imprime `HX711 not found.`), lê o peso, imprime a leitura e o nível, e acende o LED correspondente. No nível LEVE, bipa ao entrar no nível e depois a cada 30 s.
+1. Lê 5 amostras do HX711 e usa a mediana (até 1 s de espera por amostra; se o sensor não responder, imprime `HX711 not found.`). Imprime a leitura e o nível e acende o LED correspondente. No nível LEVE, bipa ao entrar no nível e depois a cada 30 s.
 2. Chama `registrarConsumo(peso)`.
 3. Imprime o total consumido.
 
-**Máquina de estados de `registrarConsumo()`:**
-1. **Base vazia** (peso < mínimo): se já existe referência, marca `copoFoiRetirado = true` e reinicia o timer de estabilidade.
-2. **Peso instável** (variação > 300 desde a última leitura): reinicia o timer. Nada é registrado até passarem 2 s estáveis.
-3. **Primeira leitura estável:** salva como `leituraReferencia` e imprime `Peso inicial registrado`.
-4. **Leitura estável depois de o recipiente ter sido retirado e recolocado:**
-   - Se a referência menos o peso atual for > 300, conta como **gole**: soma ao `totalConsumido` e imprime `Bebeu`.
-   - Se for < −300, imprime `Copo reabastecido`. O total não muda.
-   - Em qualquer caso, atualiza a referência e limpa `copoFoiRetirado`.
-5. Variações com o recipiente **sem sair da base** são ignoradas.
+**Estabilidade.** As últimas 6 leituras ficam numa janela. O peso só é considerado estável quando **todas** estão a até 150 de distância entre si (máx − mín). O valor usado é a **média da janela**. Isso evita aceitar um peso que ainda está mudando devagar, como água balançando ou mão apoiada. A janela recomeça quando a garrafa entra ou sai da base.
+
+**Máquina de estados de `registrarConsumo()`** (`SEM_REFERENCIA` → `NA_BASE` ⇄ `FORA_DA_BASE`):
+1. **Base vazia:** se estava `NA_BASE`, passa para `FORA_DA_BASE` e marca o início da retirada. Se a base vazia estiver estável perto de 0, corrige o zero do HX711 aos poucos (**auto-zero**, compensa a deriva térmica).
+2. **Peso instável:** nada acontece.
+3. **Primeiro peso estável (`SEM_REFERENCIA`):** vira `leituraReferencia` e imprime `Peso inicial registrado`.
+4. **Peso estável depois de uma retirada de pelo menos 1 s:**
+   - Referência − peso > 5 ml: **gole**. Soma ao `totalConsumido`, salva na EEPROM e imprime `Bebeu`.
+   - Referência − peso < −5 ml: imprime `Copo reabastecido`. O total não muda.
+   - Diferença > 1000 ml: imprime `Variacao implausivel ignorada`.
+   - Nesses três casos a referência passa a ser o peso atual. Se a diferença for pequena (±5 ml), a **referência é mantida**, então goles pequenos se acumulam e são contados numa retirada seguinte.
+   - Retiradas com menos de 1 s são tratadas como tranco: nada é avaliado.
+5. **Garrafa parada na base:** a referência não acompanha quedas. Se ela tiver sido capturada com a mão apoiada, o excesso é descontado na retirada seguinte e o total fecha certo. Só uma subida estável acima de 20 ml (água despejada sem tirar a garrafa) imprime `Copo reabastecido` e atualiza a referência.
+
+**Limitação:** se a pessoa bebe e reabastece **na mesma retirada**, a balança só vê o saldo final, e esse gole se perde.
 
 **Persistência:** `totalConsumido` é salvo na EEPROM a cada gole e recuperado no `setup()`, então sobrevive a resets e quedas de energia. Não há RTC, então não há reset diário.
 
@@ -153,7 +164,7 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 | Decisão | Motivo |
 |---|---|
 | Ignorar a lista de componentes do `quinta/README.md` | Pedido explícito do dono do projeto. O `.ino` é a referência |
-| Não alterar o `.ino` | O app se adapta ao firmware existente lendo o texto da Serial |
+| Preservar o texto da Serial ao evoluir o `.ino` | O app lê exatamente essas linhas. A lógica de detecção pode mudar, mas as mensagens devem continuar iguais |
 | Webapp em HTML único, sem build nem frameworks | Simples de hospedar (GitHub Pages) e de manter numa disciplina |
 | Web Serial (USB) e Web Bluetooth (BLE UART) | São as únicas formas de um navegador falar com um Arduino sem Wi-Fi |
 | Modo demonstração que replica a lógica do `.ino` | Permite testar e apresentar sem o hardware |
@@ -327,7 +338,7 @@ Cada linha impressa pelo `.ino` é reconhecida por uma expressão regular:
 | `Peso inicial registrado: 450.00 ml` | `/^Peso inicial registrado:\s*(-?[\d.]+)/` | Adiciona evento de início. |
 | `HX711 not found.` | `/HX711 not found/` | Mostra o alerta e limpa a leitura atual. |
 
-As demais linhas (`Initializing the scale...`, `read: ...` etc.) são ignoradas.
+As demais linhas (`Initializing the scale...`, `read: ...`, `Variacao implausivel ignorada` etc.) são ignoradas.
 
 > **Importante:** se o texto de algum `Serial.print` do `.ino` for alterado, a regex correspondente em `RULES` (no `index.html`) precisa ser ajustada também.
 
@@ -357,10 +368,11 @@ As demais linhas (`Initializing the scale...`, `read: ...` etc.) são ignoradas.
 
 O modo demo é uma **tradução direta da lógica do `.ino` para JavaScript**:
 
-- Usa as mesmas constantes: `PESO_MINIMO = 250`, `LIMITE_LEVE = 10000`, `LIMITE_MEDIO = 25000`, `VARIACAO_MINIMA = 300`, `TEMPO_ESTABILIZACAO = 2000 ms`.
+- Usa as mesmas constantes do `.ino` (`PESO_MINIMO`, `LIMITE_LEVE`, `LIMITE_MEDIO`, `JANELA`, `TOLERANCIA_ESTAVEL`, `LIMIAR_GOLE`, `LIMIAR_REABASTECER_NA_BASE`, `DIFERENCA_MAXIMA`, `TEMPO_MIN_FORA`, `BANDA_ZERO`, `GANHO_ZERO`).
 - Usa a mesma conversão: `paraMl(peso) = peso / 100 - 5`.
-- Reimplementa `registrarConsumo()`: referência inicial, detecção de garrafa retirada, espera de estabilização, cálculo do gole (`diferenca / 100`) e reabastecimento.
-- A cada 500 ms (como o `INTERVALO_LEITURA` do `loop()`), gera um peso simulado com ruído e **imprime as mesmas linhas** que o Arduino imprimiria.
+- Reimplementa `registrarConsumo()`: janela de estabilidade, máquina de estados, tranco, auto-zero, goles acumulados e reabastecimento.
+- Simula `lerMediana()`: 5 amostras com ruído e picos ocasionais (5%), além de uma deriva lenta do zero, para exercitar a mediana e o auto-zero.
+- A cada 500 ms (como o `INTERVALO_LEITURA` do `loop()`), gera um peso simulado e **imprime as mesmas linhas** que o Arduino imprimiria.
 
 Essas linhas passam pelo mesmo parser usado com o hardware real. Assim, o modo demo também serve de teste do parser.
 
@@ -388,7 +400,7 @@ O botão **Limpar** apaga os eventos do dia.
 
 ## Limitações conhecidas
 
-- **Total depende do Arduino**: o `totalConsumido` vive na RAM do Arduino. Se ele reiniciar ou perder energia, o total volta a 0. O histórico de eventos no app é mantido.
+- **Total depende do Arduino**: o `totalConsumido` é calculado e salvo na EEPROM pelo Arduino, e o app só exibe o valor recebido.
 - **Sem reset diário no Arduino**: o total só zera quando o Arduino reinicia. O app zera a lista de eventos a cada dia, mas o número do anel é o que o Arduino envia.
 - **iPhone/iOS**: o Safari não suporta Web Serial nem Web Bluetooth. Em iOS seria necessário um app nativo ou um navegador como o Bluefy (só para BLE).
 - **Pinos 0/1 compartilhados**: com o módulo BLE nos pinos 0/1, USB e Bluetooth disputam a mesma Serial. Para usar os dois, seria preciso mover o BLE para `SoftwareSerial` e duplicar os `print` no `.ino`.
