@@ -71,7 +71,7 @@ O `quinta/README.md` descreve uma versão **planejada e mais ambiciosa** do que 
 | Meta diária | ⚠️ Só no webapp: valor fixo editável, sem cálculo automático |
 | Lembretes por tempo sem beber | ❌ Não implementado (o buzzer só toca no nível LEVE) |
 | Exibir em tela | ✅ Via webapp (não há display físico) |
-| Reset diário automático | ⚠️ Só a lista de eventos do webapp; o total do Arduino fica salvo na EEPROM e não zera |
+| Reset diário automático | ⚠️ Não é automático: use **Zerar consumo** no webapp (comando `ZERAR`), que zera o total salvo na EEPROM |
 
 ### Hardware real (conforme o `.ino`)
 
@@ -89,27 +89,29 @@ Não há Wi-Fi, BLE ou display no firmware. **A única saída de dados é `Seria
 
 ### Como o firmware funciona
 
-**Unidades.** `calibration_factor = 1.0`, então `scale.get_units()` devolve o valor **bruto** do HX711 após a tara. Cada leitura é a **mediana de 5 amostras** (`lerMediana()`), que descarta picos isolados do sensor. O código chama esse valor de `peso`. A conversão para mL é empírica:
+**Unidades.** `calibration_factor = 1.0`, então `scale.get_units()` devolve o valor **bruto** do HX711 após a tara. Cada leitura é a **mediana de 5 amostras** (`lerMediana()`), que descarta picos isolados do sensor. O código chama esse valor de `peso`. A conversão para mL usa duas constantes de calibração (1 ml de água ≈ 1 g):
 
 ```
-ml = peso / 100 - 5        // paraMl()
-gole (ml) = diferença_de_peso / 100   // o offset -5 se cancela
+ml = (peso - CONTAGENS_GARRAFA_VAZIA) / CONTAGENS_POR_ML   // paraMl()
+gole (ml) = diferença_de_peso / CONTAGENS_POR_ML           // a garrafa vazia se cancela
 ```
 
-**Limiares** (em unidades brutas e o equivalente aproximado em mL):
+`CONTAGENS_POR_ML = 194,44` foi calibrado com 180 ml reais, que a conversão antiga (`peso / 100 - 5`) mostrava como 350 ml. `CONTAGENS_GARRAFA_VAZIA = 500` é o valor antigo, ainda não medido. Para recalibrar, ajuste essas duas constantes: os limiares em mL acompanham automaticamente (macro `ML()`).
 
-| Constante | Bruto | ≈ mL | Uso |
+**Limiares** (os de volume são definidos em mL e convertidos com `ML()`; os de ruído ficam em contagens brutas):
+
+| Constante | Definição | ≈ mL | Uso |
 |---|---|---|---|
-| `PESO_MINIMO` | 250 | — | Abaixo disso, a base é considerada **vazia** (recipiente retirado) |
-| `LIMITE_LEVE` | 10000 | 95 | Abaixo disso, nível **LEVE** (LED 4 + buzzer) |
-| `LIMITE_MEDIO` | 25000 | 245 | Abaixo disso, **MEDIO** (LED 3). Acima, **ALTO** (LED 2) |
+| `PESO_MINIMO` | 250 contagens | ~1,3 | Abaixo disso, a base é considerada **vazia** (recipiente retirado) |
+| `LIMITE_LEVE` | garrafa + `ML(95)` | 95 | Abaixo disso, nível **LEVE** (LED 4 + buzzer) |
+| `LIMITE_MEDIO` | garrafa + `ML(245)` | 245 | Abaixo disso, **MEDIO** (LED 3). Acima, **ALTO** (LED 2) |
 | `JANELA_ESTABILIDADE` | 6 leituras | — | Janela de ~3 s usada para decidir se o peso está estável |
-| `TOLERANCIA_ESTAVEL` | 150 | 1,5 | Variação máxima (máx − mín) aceita dentro da janela |
-| `LIMIAR_GOLE` | 500 | 5 | Diferença mínima, após retirar e recolocar, para contar gole ou reabastecimento |
-| `LIMIAR_REABASTECER_NA_BASE` | 2000 | 20 | Subida mínima com a garrafa parada na base para contar reabastecimento |
-| `DIFERENCA_MAXIMA` | 100000 | 1000 | Acima disso a variação é implausível (troca de garrafa, objeto estranho) e é ignorada |
+| `TOLERANCIA_ESTAVEL` | 150 contagens | ~0,8 | Variação máxima (máx − mín) aceita dentro da janela |
+| `LIMIAR_GOLE` | `ML(5)` | 5 | Diferença mínima, após retirar e recolocar, para contar gole ou reabastecimento |
+| `LIMIAR_REABASTECER_NA_BASE` | `ML(20)` | 20 | Subida mínima com a garrafa parada na base para contar reabastecimento |
+| `DIFERENCA_MAXIMA` | `ML(1000)` | 1000 | Acima disso a variação é implausível (troca de garrafa, objeto estranho) e é ignorada |
 | `TEMPO_MIN_FORA` | 1000 ms | — | Retiradas mais curtas são tratadas como tranco |
-| `BANDA_ZERO` | 200 | 2 | Com a base vazia e estável dentro dessa faixa, o zero é corrigido (auto-zero) |
+| `BANDA_ZERO` | 200 contagens | ~1 | Com a base vazia e estável dentro dessa faixa, o zero é corrigido (auto-zero) |
 
 Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `garrafaNaBase()` também trata isso como "retirado".
 
@@ -136,7 +138,15 @@ Observação: entre 250 e 500 brutos, `paraMl()` dá um valor negativo, e `garra
 
 **Persistência:** `totalConsumido` é salvo na EEPROM a cada gole e recuperado no `setup()`, então sobrevive a resets e quedas de energia. Não há RTC, então não há reset diário.
 
-**Tara na inicialização:** o `setup()` avisa na Serial e pisca os LEDs por 5 s para a garrafa ser retirada antes do `tare()`. Se ela continuar na base, o peso dela vira o zero e as medições ficam erradas.
+**Tara salva na EEPROM:** o zero da balança (offset do HX711) fica salvo na EEPROM (endereços 6–11, com assinatura própria). No `setup()`, se existe um zero salvo, ele é recuperado e a balança já começa a medir, sem os 5 s de espera. A tara só roda sozinha na **primeira** inicialização, quando ainda não há zero salvo.
+
+**Refazer a tara:** envie `TARA` + nova linha pela Serial (botão **Zerar balança** no webapp, ou pelo Serial Monitor). O Arduino avisa na Serial, pisca os LEDs por 5 s para a garrafa ser retirada, faz o `tare()`, salva o novo zero e imprime `Balanca zerada`. Se a garrafa continuar na base, o peso dela vira o zero e as medições ficam erradas. A referência de consumo é refeita depois da tara, mas o total consumido não muda.
+
+**Zerar o consumo:** envie `ZERAR` + nova linha (botão **Zerar consumo** no webapp). O Arduino zera `totalConsumido`, salva na EEPROM e imprime `Total zerado`. A referência de peso continua valendo.
+
+**Meta diária:** fica só no webapp (salva no navegador) e é alterada pelo botão **Alterar meta**, entre 100 e 10.000 ml. O Arduino não conhece a meta.
+
+**Zero salvo e auto-zero:** o auto-zero continua corrigindo a deriva térmica com a base vazia. O offset corrigido é regravado na EEPROM quando muda pelo menos ~1 ml e no máximo a cada 10 min, para poupar a memória.
 
 ### Contrato de saída Serial (o que o webapp depende)
 
@@ -180,7 +190,7 @@ O webapp faz parsing exatamente dessas strings (veja [Parser da Serial](#parser-
 **Ideias de evolução** (nenhuma implementada):
 - Calibrar o HX711 (`calibration_factor`) e trocar `paraMl()` por uma conversão em gramas, com 1 g ≈ 1 mL.
 - Adicionar sensor de temperatura e a capacidade da garrafa, para mostrar a %. Isso exigiria novas linhas na Serial e novas regras no parser.
-- Usar um RTC para o reset diário (e um comando para zerar o total salvo na EEPROM).
+- Usar um RTC para o reset diário automático (hoje o total é zerado pelo comando `ZERAR`).
 - Lembretes de hidratação, no buzzer e/ou como notificação no webapp.
 - Mover o BLE para `SoftwareSerial`, para usar USB e Bluetooth ao mesmo tempo.
 - Migrar para ESP32 (BLE ou Wi-Fi nativos) e emitir JSON.

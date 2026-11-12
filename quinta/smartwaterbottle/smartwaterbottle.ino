@@ -1,8 +1,8 @@
 #include "HX711.h"
 #include <EEPROM.h>
 
-const int LOADCELL_DOUT_PIN = 8;
-const int LOADCELL_SCK_PIN = 9;
+const int LOADCELL_DOUT_PIN = 7;
+const int LOADCELL_SCK_PIN = 6;
 
 const int LED_LEVE  = 4;
 const int LED_MEDIO = 3;
@@ -10,23 +10,37 @@ const int LED_ALTO  = 2;
 
 const int BUZZER = 6;
 
+// --- Calibracao ---
+// `peso` e a contagem bruta do HX711 apos a tara (calibration_factor = 1.0).
+// ml = (peso - CONTAGENS_GARRAFA_VAZIA) / CONTAGENS_POR_ML   (1 ml de agua = 1 g)
+// Calibrado com 180 ml reais, que antes apareciam como 350 ml:
+// (350 + 5) * 100 = 35500 contagens; (35500 - 500) / 180 = 194,44 contagens/ml.
+// Para recalibrar: ajuste CONTAGENS_POR_ML (e, se preciso, a garrafa vazia).
+const float CONTAGENS_POR_ML = 194.44;
+const float CONTAGENS_GARRAFA_VAZIA = 500.00;
+
+// Converte um volume em ml para contagens do HX711 (para diferencas de peso).
+#define ML(x) ((x) * CONTAGENS_POR_ML)
+
+// Abaixo disso a base e considerada vazia (ruido do sensor, em contagens).
 const float PESO_MINIMO = 250.00;
-const float LIMITE_LEVE = 10000.00;
-const float LIMITE_MEDIO = 25000.00;
+// Niveis dos LEDs: LEVE abaixo de 95 ml, MEDIO abaixo de 245 ml, ALTO acima.
+const float LIMITE_LEVE = CONTAGENS_GARRAFA_VAZIA + ML(95.0);
+const float LIMITE_MEDIO = CONTAGENS_GARRAFA_VAZIA + ML(245.0);
 
 // --- Deteccao de consumo ---
 // Uma leitura so vale quando as ultimas JANELA_ESTABILIDADE leituras ficam
 // todas dentro de TOLERANCIA_ESTAVEL (max - min). A referencia e a media da janela.
 const int JANELA_ESTABILIDADE = 6;              // 6 leituras x 500 ms = 3 s
-const float TOLERANCIA_ESTAVEL = 150.00;        // ~1,5 ml
+const float TOLERANCIA_ESTAVEL = 150.00;        // ruido do sensor, em contagens (~0,8 ml)
 // Diferenca minima, apos retirar e recolocar, para contar gole ou reabastecimento.
 // Diferencas menores mantem a referencia, entao pequenos goles se acumulam.
-const float LIMIAR_GOLE = 500.00;               // ~5 ml
+const float LIMIAR_GOLE = ML(5.0);
 // Subida minima com a garrafa parada na base para considerar reabastecimento
 // (agua despejada sem retirar). Maior que LIMIAR_GOLE porque a garrafa pode ser tocada.
-const float LIMIAR_REABASTECER_NA_BASE = 2000.00; // ~20 ml
+const float LIMIAR_REABASTECER_NA_BASE = ML(20.0);
 // Diferencas acima disso sao implausiveis (troca de garrafa, objeto estranho).
-const float DIFERENCA_MAXIMA = 100000.00;       // ~1 L
+const float DIFERENCA_MAXIMA = ML(1000.0);
 // Retiradas mais curtas que isso sao tratadas como tranco, nao como gole.
 const unsigned long TEMPO_MIN_FORA = 1000;
 
@@ -57,6 +71,22 @@ const int EEPROM_ENDERECO_ASSINATURA = 0;
 const int EEPROM_ENDERECO_TOTAL = 2;
 const uint16_t EEPROM_ASSINATURA = 0xA71D;
 
+// EEPROM: assinatura + zero da balanca (offset do HX711, long).
+// Com o zero salvo, o setup() nao precisa refazer a tara a cada inicializacao.
+const int EEPROM_ENDERECO_ASSINATURA_ZERO = 6;
+const int EEPROM_ENDERECO_ZERO = 8;
+const uint16_t EEPROM_ASSINATURA_ZERO = 0x7A2E;
+
+// O auto-zero muda o offset aos poucos. Ele so e regravado na EEPROM quando
+// mudou pelo menos isso e no maximo uma vez por intervalo, poupando a memoria.
+const long ZERO_DIFERENCA_SALVAR = 100;                 // contagens (~0,5 ml)
+const unsigned long INTERVALO_SALVAR_ZERO = 600000;     // 10 min
+
+// Comando recebido pela Serial (enviado pelo webapp) para refazer a tara.
+const char COMANDO_TARA[] = "TARA";
+// Comando para zerar o total consumido (novo dia / nova meta).
+const char COMANDO_ZERAR[] = "ZERAR";
+
 HX711 scale;
 
 float calibration_factor = 1.0;
@@ -79,8 +109,13 @@ bool estavaLeve = false;
 unsigned long ultimoBipe = 0;
 unsigned long ultimoCiclo = 0;
 
+long zeroSalvo = 0;
+unsigned long ultimoSalvamentoZero = 0;
+
+void salvarZero();
+
 float paraMl(float peso) {
-  return (peso / 100) - 5;
+  return (peso - CONTAGENS_GARRAFA_VAZIA) / CONTAGENS_POR_ML;
 }
 
 bool garrafaNaBase(float peso) {
@@ -158,6 +193,11 @@ void ajustarZero(float media) {
   scale.set_offset(scale.get_offset() + correcao);
   // As leituras da janela usam o zero antigo: recomeca para nao corrigir duas vezes.
   limparJanela();
+
+  if (labs(scale.get_offset() - zeroSalvo) >= ZERO_DIFERENCA_SALVAR &&
+      millis() - ultimoSalvamentoZero >= INTERVALO_SALVAR_ZERO) {
+    salvarZero();
+  }
 }
 
 void apagarLeds() {
@@ -188,6 +228,24 @@ void salvarTotal() {
   EEPROM.put(EEPROM_ENDERECO_TOTAL, totalConsumido);
 }
 
+// Recupera o zero salvo. Retorna false se nunca houve uma tara salva.
+bool carregarZero() {
+  uint16_t assinatura;
+  EEPROM.get(EEPROM_ENDERECO_ASSINATURA_ZERO, assinatura);
+  if (assinatura != EEPROM_ASSINATURA_ZERO) {
+    return false;
+  }
+  EEPROM.get(EEPROM_ENDERECO_ZERO, zeroSalvo);
+  return true;
+}
+
+void salvarZero() {
+  zeroSalvo = scale.get_offset();
+  EEPROM.put(EEPROM_ENDERECO_ZERO, zeroSalvo);
+  EEPROM.put(EEPROM_ENDERECO_ASSINATURA_ZERO, EEPROM_ASSINATURA_ZERO);
+  ultimoSalvamentoZero = millis();
+}
+
 void avisarTara() {
   Serial.println("Retire a garrafa da base: a balanca sera zerada em 5 segundos...");
 
@@ -202,6 +260,59 @@ void avisarTara() {
     delay(250);
   }
   apagarLeds();
+}
+
+// Avisa, espera a garrafa sair da base, zera a balanca e salva o zero na EEPROM.
+void tarar() {
+  avisarTara();
+
+  if (!scale.wait_ready_timeout(TIMEOUT_HX711)) {
+    Serial.println("HX711 not found.");
+    return;
+  }
+
+  Serial.println("Before setting up the scale:");
+  Serial.print("read: \t\t");
+  Serial.println(scale.read());
+
+  scale.tare();
+  salvarZero();
+
+  // A referencia e a janela foram medidas com o zero antigo.
+  estado = SEM_REFERENCIA;
+  limparJanela();
+
+  Serial.println("Balanca zerada. Coloque a garrafa na base.");
+}
+
+void executarComando(const char *comando) {
+  if (strcasecmp(comando, COMANDO_TARA) == 0) {
+    tarar();
+  } else if (strcasecmp(comando, COMANDO_ZERAR) == 0) {
+    // So o total e zerado: a referencia de peso continua valendo.
+    totalConsumido = 0;
+    salvarTotal();
+    Serial.println("Total zerado");
+  }
+}
+
+// Le comandos de texto terminados em nova linha, sem bloquear o loop.
+void lerComandos() {
+  static char comando[16];
+  static byte tamanho = 0;
+
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      comando[tamanho] = '\0';
+      if (tamanho > 0) {
+        executarComando(comando);
+      }
+      tamanho = 0;
+    } else if (tamanho < sizeof(comando) - 1) {
+      comando[tamanho++] = c;
+    }
+  }
 }
 
 void atualizarBuzzer(float peso) {
@@ -227,7 +338,7 @@ void avaliarRetirada(float media) {
     Serial.println("Variacao implausivel ignorada");
     leituraReferencia = media;
   } else if (diferenca > LIMIAR_GOLE) {
-    float bebido = diferenca / 100;
+    float bebido = diferenca / CONTAGENS_POR_ML;
     totalConsumido += bebido;
     salvarTotal();
     Serial.print("Bebeu: ");
@@ -313,21 +424,22 @@ void setup() {
 
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
 
-  avisarTara();
-
-  if (scale.wait_ready_timeout(TIMEOUT_HX711)) {
-    Serial.println("Before setting up the scale:");
-    Serial.print("read: \t\t");
-    Serial.println(scale.read());
-  }
-
   scale.set_scale(calibration_factor);
-  scale.tare();
 
-  Serial.println("Scale is zeroed. Place a weight on the scale...");
+  if (carregarZero()) {
+    scale.set_offset(zeroSalvo);
+    Serial.print("Zero salvo recuperado: ");
+    Serial.println(zeroSalvo);
+    Serial.println("Para zerar de novo, envie TARA (botao no webapp).");
+  } else {
+    // Primeira execucao: ainda nao ha zero salvo.
+    tarar();
+  }
 }
 
 void loop() {
+  lerComandos();
+
   if (millis() - ultimoCiclo < INTERVALO_LEITURA) {
     return;
   }

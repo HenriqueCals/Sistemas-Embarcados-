@@ -71,12 +71,16 @@
   .big { font-size: 44px; font-weight: 650; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
   .big small { font-size: 17px; font-weight: 500; color: var(--muted); margin-left: 2px; letter-spacing: 0; }
   .sub { font-size: 13px; color: var(--muted); margin-top: 8px; }
-  .goal-btn {
-    margin-top: 16px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
-    padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  .goal-line { margin-top: 16px; font-size: 13px; color: var(--muted); }
+  .goal-line b { color: var(--text); font-weight: 600; }
+  .goal-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+  .chip {
+    appearance: none; border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    font: inherit; font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 999px; cursor: pointer;
   }
-  .goal-btn b { color: var(--text); font-weight: 600; }
-  .goal-edit { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+  .chip:disabled { opacity: .45; cursor: not-allowed; }
+  .goal-edit { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; align-items: center; }
+  .goal-edit .unit { font-size: 14px; color: var(--muted); margin-left: -2px; }
   .goal-edit input {
     width: 110px; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 10px;
     border: 1px solid var(--line); background: var(--bg); color: var(--text); text-align: center;
@@ -142,10 +146,16 @@
         <div class="sub">consumidos</div>
       </div>
     </div>
-    <button class="goal-btn" id="goalBtn"><span id="pct">0%</span> da meta de <b id="goalText">2000 ml</b></button>
+    <div class="goal-line"><span id="pct">0%</span> da meta de <b id="goalText">2000 ml</b></div>
+    <div class="goal-actions" id="goalActions">
+      <button class="chip" id="goalBtn" type="button">Alterar meta</button>
+      <button class="chip" id="resetBtn" type="button" title="Conecte ao Arduino para zerar">Zerar consumo</button>
+    </div>
     <form class="goal-edit" id="goalForm" hidden>
-      <input id="goalInput" type="number" inputmode="numeric" min="100" step="50" aria-label="Meta diária em ml">
-      <button class="btn" style="width:auto;padding:9px 14px">OK</button>
+      <input id="goalInput" type="number" inputmode="numeric" min="100" max="10000" step="50" required aria-label="Meta diária em ml">
+      <span class="unit">ml</span>
+      <button class="btn" style="width:auto;padding:9px 14px">Salvar</button>
+      <button class="chip" id="goalCancel" type="button">Cancelar</button>
     </form>
   </section>
 
@@ -179,6 +189,8 @@
     <p class="note" id="supportNote"></p>
   </section>
   <section class="connect" id="disconnectBox" hidden>
+    <button class="btn ghost" id="btnTare">Zerar balança (tara)</button>
+    <p class="note" id="tareNote" hidden></p>
     <button class="btn ghost" id="btnOff">Desconectar</button>
   </section>
 </main>
@@ -200,9 +212,10 @@
     level: '',
     lastSip: null,          // { ml, at }
     goal: store.get('goal', 2000),
-    events: [],             // { type: 'sip'|'refill'|'start', ml, at }
+    events: [],             // { type: 'sip'|'refill'|'start'|'tare', ml, at }
     lastLineAt: 0,
     hx711Missing: false,
+    taring: false,          // Arduino esperando a garrafa sair da base para zerar
   };
   const saved = store.get('day', null);
   if (saved && saved.date === today()) {
@@ -225,7 +238,10 @@
     [/^Bebeu:\s*([\d.]+)/i, (m) => addEvent({ type: 'sip', ml: num(m[1]) })],
     [/^Copo reabastecido/i, () => addEvent({ type: 'refill' })],
     [/^Peso inicial registrado:\s*(-?[\d.]+)/i, (m) => addEvent({ type: 'start', ml: num(m[1]) })],
-    [/HX711 not found/i, () => { state.hx711Missing = true; state.now = null; state.level = ''; }],
+    [/HX711 not found/i, () => { state.hx711Missing = true; state.now = null; state.level = ''; state.taring = false; }],
+    [/^Retire a garrafa da base/i, () => { state.taring = true; }],
+    [/^Balanca zerada/i, () => { state.taring = false; addEvent({ type: 'tare' }); }],
+    [/^Total zerado/i, () => { state.total = 0; addEvent({ type: 'reset' }); }],
   ];
 
   let buf = '';
@@ -298,6 +314,8 @@
       if (e.type === 'sip')    { ic.textContent = '↓'; left.append(ic, `Bebeu ${fmt(e.ml)} ml`); }
       if (e.type === 'refill') { ic.textContent = '↑'; left.append(ic, 'Garrafa reabastecida'); }
       if (e.type === 'start')  { ic.textContent = '•'; left.append(ic, `Peso inicial: ${fmt(e.ml)} ml`); }
+      if (e.type === 'tare')   { ic.textContent = '0'; left.append(ic, 'Balança zerada'); }
+      if (e.type === 'reset')  { ic.textContent = '↺'; left.append(ic, 'Consumo zerado'); }
       li.append(left, t);
       list.append(li);
     }
@@ -307,19 +325,32 @@
   }
 
   /* ---------- Meta diária ---------- */
-  $('goalBtn').onclick = () => {
-    $('goalInput').value = state.goal;
-    $('goalForm').hidden = false;
-    $('goalBtn').hidden = true;
-    $('goalInput').focus();
-  };
+  // A meta fica só no navegador (localStorage); o Arduino não precisa dela.
+  function editGoal(open) {
+    $('goalForm').hidden = !open;
+    $('goalActions').hidden = open;
+    if (open) { $('goalInput').value = state.goal; $('goalInput').select(); }
+  }
+  $('goalBtn').onclick = () => editGoal(true);
+  $('goalCancel').onclick = () => editGoal(false);
   $('goalForm').onsubmit = (ev) => {
     ev.preventDefault();
     const v = parseInt($('goalInput').value, 10);
-    if (v >= 100) { state.goal = v; store.set('goal', v); }
-    $('goalForm').hidden = true;
-    $('goalBtn').hidden = false;
+    if (v >= 100 && v <= 10000) { state.goal = v; store.set('goal', v); }
+    editGoal(false);
     render();
+  };
+
+  // O total consumido fica na EEPROM do Arduino, então zerar é um comando para ele.
+  $('resetBtn').onclick = async () => {
+    if (!conn) return;
+    if (!confirm('Zerar o consumo de hoje? O total salvo no Arduino volta para 0 ml.')) return;
+    try {
+      await conn.send('ZERAR\n');
+    } catch (e) {
+      console.error(e);
+      alert('Não foi possível enviar o comando ao Arduino.');
+    }
   };
   $('clearBtn').onclick = () => { state.events = []; state.lastSip = null; persist(); render(); };
 
@@ -334,9 +365,28 @@
     $('pillText').textContent = !conn ? 'Desconectado' : stale ? 'Aguardando dados…' : names[conn.kind];
     $('connectBox').hidden = !!conn;
     $('disconnectBox').hidden = !conn;
+    $('btnTare').disabled = !conn || state.taring;
+    $('resetBtn').disabled = !conn || state.taring;
+    $('resetBtn').title = conn ? '' : 'Conecte ao Arduino para zerar';
+    $('tareNote').hidden = !state.taring;
+    $('tareNote').textContent = state.taring ? 'Retire a garrafa da base: a balança será zerada em 5 segundos…' : '';
   }
-  function setConn(c) { conn = c; state.lastLineAt = Date.now(); buf = ''; render(); }
-  function lost() { conn = null; render(); }
+  function setConn(c) { conn = c; state.lastLineAt = Date.now(); state.taring = false; buf = ''; render(); }
+  function lost() { conn = null; state.taring = false; render(); }
+
+  // Tara sob demanda: o Arduino guarda o zero na EEPROM e não refaz a tara ao ligar.
+  $('btnTare').onclick = async () => {
+    if (!conn) return;
+    if (!confirm('Retire a garrafa da base e toque em OK. A balança será zerada em 5 segundos.')) return;
+    try {
+      await conn.send('TARA\n');
+      state.taring = true;
+      render();
+    } catch (e) {
+      console.error(e);
+      alert('Não foi possível enviar o comando ao Arduino.');
+    }
+  };
 
   const hasSerial = 'serial' in navigator;
   const hasBle = 'bluetooth' in navigator;
@@ -356,12 +406,16 @@
       const decoder = new TextDecoderStream();
       const piped = port.readable.pipeTo(decoder.writable).catch(() => {});
       const reader = decoder.readable.getReader();
+      const writer = port.writable.getWriter();
+      const enc = new TextEncoder();
       let open = true;
       setConn({
         kind: 'usb',
+        send: (text) => writer.write(enc.encode(text)),
         async close() {
           open = false;
           try { await reader.cancel(); } catch {}
+          try { writer.releaseLock(); } catch {}
           await piped;
           try { await port.close(); } catch {}
         },
@@ -381,8 +435,9 @@
 
   // Bluetooth LE — módulos UART transparentes (HM-10 / Nordic UART)
   const BLE_UARTS = [
-    { svc: '0000ffe0-0000-1000-8000-00805f9b34fb', ch: '0000ffe1-0000-1000-8000-00805f9b34fb' },
-    { svc: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', ch: '6e400003-b5a3-f393-e0a9-e50e24dcca9e' },
+    // ch: notificações (Arduino → app); wr: escrita (app → Arduino)
+    { svc: '0000ffe0-0000-1000-8000-00805f9b34fb', ch: '0000ffe1-0000-1000-8000-00805f9b34fb', wr: '0000ffe1-0000-1000-8000-00805f9b34fb' },
+    { svc: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', ch: '6e400003-b5a3-f393-e0a9-e50e24dcca9e', wr: '6e400002-b5a3-f393-e0a9-e50e24dcca9e' },
   ];
   $('btnBle').onclick = async () => {
     try {
@@ -391,9 +446,14 @@
         optionalServices: BLE_UARTS.map(u => u.svc),
       });
       const server = await device.gatt.connect();
-      let ch = null;
+      let ch = null, wr = null;
       for (const u of BLE_UARTS) {
-        try { ch = await (await server.getPrimaryService(u.svc)).getCharacteristic(u.ch); break; } catch {}
+        try {
+          const svc = await server.getPrimaryService(u.svc);
+          ch = await svc.getCharacteristic(u.ch);
+          wr = u.wr === u.ch ? ch : await svc.getCharacteristic(u.wr);
+          break;
+        } catch { ch = null; wr = null; }
       }
       if (!ch) { device.gatt.disconnect(); alertMsg('Dispositivo sem serviço UART compatível.'); return; }
       const dec = new TextDecoder();
@@ -401,7 +461,14 @@
       await ch.startNotifications();
       let closing = false;
       device.addEventListener('gattserverdisconnected', () => { if (!closing) lost(); });
-      setConn({ kind: 'ble', async close() { closing = true; device.gatt.disconnect(); } });
+      const enc = new TextEncoder();
+      setConn({
+        kind: 'ble',
+        send: (text) => wr.properties.writeWithoutResponse
+          ? wr.writeValueWithoutResponse(enc.encode(text))
+          : wr.writeValueWithResponse(enc.encode(text)),
+        async close() { closing = true; device.gatt.disconnect(); },
+      });
     } catch (e) { if (e.name !== 'NotFoundError') { console.error(e); alertMsg('Falha ao conectar via Bluetooth.'); } }
   };
 
@@ -414,11 +481,14 @@
 
   /* ---------- Modo demo: replica a lógica do smartwaterbottle.ino ---------- */
   $('btnDemo').onclick = () => {
-    const PESO_MINIMO = 250, LIMITE_LEVE = 10000, LIMITE_MEDIO = 25000;
-    const JANELA = 6, TOLERANCIA_ESTAVEL = 150, LIMIAR_GOLE = 500, LIMIAR_REABASTECER_NA_BASE = 2000;
-    const DIFERENCA_MAXIMA = 100000, TEMPO_MIN_FORA = 1000, BANDA_ZERO = 200, GANHO_ZERO = 0.5;
+    const CONTAGENS_POR_ML = 194.44, CONTAGENS_GARRAFA_VAZIA = 500;
+    const ML = (x) => x * CONTAGENS_POR_ML;
+    const PESO_MINIMO = 250;
+    const LIMITE_LEVE = CONTAGENS_GARRAFA_VAZIA + ML(95), LIMITE_MEDIO = CONTAGENS_GARRAFA_VAZIA + ML(245);
+    const JANELA = 6, TOLERANCIA_ESTAVEL = 150, LIMIAR_GOLE = ML(5), LIMIAR_REABASTECER_NA_BASE = ML(20);
+    const DIFERENCA_MAXIMA = ML(1000), TEMPO_MIN_FORA = 1000, BANDA_ZERO = 200, GANHO_ZERO = 0.5;
     const AMOSTRAS_MEDIANA = 5;
-    const paraMl = (p) => p / 100 - 5;
+    const paraMl = (p) => (p - CONTAGENS_GARRAFA_VAZIA) / CONTAGENS_POR_ML;
     const naBase = (p) => p >= PESO_MINIMO && paraMl(p) >= 0;
     let estado = 'SEM_REFERENCIA', ref = 0, total = 0, inicioFora = 0, ultimoFora = 0;
     let janela = [], janelaComGarrafa = false;
@@ -436,7 +506,7 @@
     function avaliarRetirada(media) {
       const dif = ref - media;
       if (Math.abs(dif) > DIFERENCA_MAXIMA) { out('Variacao implausivel ignorada'); ref = media; }
-      else if (dif > LIMIAR_GOLE) { const b = dif / 100; total += b; out(`Bebeu: ${b.toFixed(2)} ml`); ref = media; }
+      else if (dif > LIMIAR_GOLE) { const b = dif / CONTAGENS_POR_ML; total += b; out(`Bebeu: ${b.toFixed(2)} ml`); ref = media; }
       else if (dif < -LIMIAR_GOLE) { out('Copo reabastecido'); ref = media; }
       // diferença pequena: mantém a referência para acumular goles pequenos
     }
@@ -480,7 +550,22 @@
       return amostras[AMOSTRAS_MEDIANA >> 1];
     }
 
+    // Simula o comando TARA: aviso, 5 s parado com a base vazia, zero refeito.
+    let tarandoAte = 0;
+    function tarar() {
+      out('Retire a garrafa da base: a balanca sera zerada em 5 segundos...');
+      tarandoAte = Date.now() + 5000;
+    }
+
     const timer = setInterval(() => {
+      if (tarandoAte) {
+        if (Date.now() < tarandoAte) return;   // o Arduino fica bloqueado durante o aviso
+        tarandoAte = 0;
+        offset = deriva;
+        estado = 'SEM_REFERENCIA'; janela = [];
+        phase = 'off'; ticks = 0;
+        out('Balanca zerada. Coloque a garrafa na base.');
+      }
       ticks++;
       deriva += 2;   // o zero da célula de carga deriva devagar
       if (phase === 'on' && ticks > 14) { phase = 'off'; ticks = 0; }
@@ -488,13 +573,21 @@
         phase = 'on'; ticks = 0;
         ml = ml < 120 ? 500 : ml - (25 + Math.random() * 70);
       }
-      const peso = lerMediana(phase === 'off' ? 0 : (ml + 5) * 100);
+      const peso = lerMediana(phase === 'off' ? 0 : CONTAGENS_GARRAFA_VAZIA + ML(ml));
       const lvl = peso < PESO_MINIMO ? 'vazio' : peso < LIMITE_LEVE ? 'LEVE' : peso < LIMITE_MEDIO ? 'MEDIO' : 'ALTO';
       out(`Leitura: ${paraMl(peso).toFixed(2)} ml -> ${lvl}`);
       registrar(peso);
       out(`Total de agua consumida: ${total.toFixed(2)} ml`);
     }, 500);
-    setConn({ kind: 'demo', close() { clearInterval(timer); } });
+    setConn({
+      kind: 'demo',
+      async send(text) {
+        const cmd = text.trim().toUpperCase();
+        if (cmd === 'TARA') tarar();
+        if (cmd === 'ZERAR') { total = 0; out('Total zerado'); }
+      },
+      close() { clearInterval(timer); },
+    });
   };
 
   setInterval(render, 2000);
