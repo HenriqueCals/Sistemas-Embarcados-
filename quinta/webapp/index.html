@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Garrafa</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #0f1720;
+    --muted: #6b7280;
+    --line: #e6e8ec;
+    --accent: #2f7cf6;
+    --accent-soft: #e3edfe;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --bad: #dc2626;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0d10;
+      --card: #15181d;
+      --text: #e8eaed;
+      --muted: #8b93a1;
+      --line: #23272e;
+      --accent: #5b9bff;
+      --accent-soft: #1a2638;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: env(safe-area-inset-top, 0px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+    min-height: 100dvh;
+  }
+  main { max-width: 440px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  [hidden] { display: none !important; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding-top: 18px; }
+  h1 { font-size: 20px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 13px; color: var(--muted);
+    background: var(--card); border: 1px solid var(--line);
+    padding: 6px 11px; border-radius: 999px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
+  .pill.on .dot { background: var(--ok); opacity: 1; }
+  .pill.stale .dot { background: var(--warn); opacity: 1; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 18px; }
+
+  /* Anel de progresso */
+  .hero { display: flex; flex-direction: column; align-items: center; padding: 26px 18px 20px; }
+  .ring { position: relative; width: min(64vw, 230px); aspect-ratio: 1; }
+  .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring circle { fill: none; stroke-width: 9; }
+  .ring .track { stroke: var(--accent-soft); }
+  .ring .bar { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .8s cubic-bezier(.2,.8,.2,1); }
+  .ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .big { font-size: 44px; font-weight: 650; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
+  .big small { font-size: 17px; font-weight: 500; color: var(--muted); margin-left: 2px; letter-spacing: 0; }
+  .sub { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .goal-btn {
+    margin-top: 16px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
+    padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  }
+  .goal-btn b { color: var(--text); font-weight: 600; }
+  .goal-edit { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+  .goal-edit input {
+    width: 110px; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); text-align: center;
+  }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  .value { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .value small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  .levels { display: flex; gap: 5px; margin-top: 10px; }
+  .levels span { flex: 1; height: 6px; border-radius: 3px; background: var(--line); transition: background .3s; }
+  .levels[data-l="LEVE"]  span:nth-child(-n+1),
+  .levels[data-l="MEDIO"] span:nth-child(-n+2),
+  .levels[data-l="ALTO"]  span:nth-child(-n+3) { background: var(--accent); }
+  .levels[data-l="LEVE"] span:first-child { background: var(--warn); }
+
+  .alert {
+    border-radius: 14px; padding: 12px 14px; font-size: 14px;
+    background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad);
+  }
+
+  .feed-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .feed { list-style: none; margin: 0; padding: 0; }
+  .feed li { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .feed li:first-child { border-top: 0; }
+  .feed .t { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .feed .ic { display: inline-block; width: 22px; color: var(--accent); }
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 0 2px; }
+  .link { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; padding: 0; }
+
+  .connect { display: flex; flex-direction: column; gap: 10px; }
+  .btn {
+    appearance: none; border: 0; font: inherit; font-weight: 600; font-size: 15px;
+    padding: 14px 16px; border-radius: 14px; cursor: pointer; width: 100%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn.ghost { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:active:not(:disabled) { transform: scale(.985); }
+  .note { font-size: 12px; color: var(--muted); text-align: center; margin: 2px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Garrafa</h1>
+    <span class="pill" id="pill"><span class="dot"></span><span id="pillText">Desconectado</span></span>
+  </header>
+
+  <div class="alert" id="alert" hidden>Sensor de peso (HX711) não encontrado.</div>
+
+  <section class="card hero">
+    <div class="ring">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <circle class="track" cx="100" cy="100" r="88"/>
+        <circle class="bar" id="ringBar" cx="100" cy="100" r="88"/>
+      </svg>
+      <div class="ring-center">
+        <div class="big"><span id="total">0</span><small>ml</small></div>
+        <div class="sub">consumidos</div>
+      </div>
+    </div>
+    <button class="goal-btn" id="goalBtn"><span id="pct">0%</span> da meta de <b id="goalText">2000 ml</b></button>
+    <form class="goal-edit" id="goalForm" hidden>
+      <input id="goalInput" type="number" inputmode="numeric" min="100" step="50" aria-label="Meta diária em ml">
+      <button class="btn" style="width:auto;padding:9px 14px">OK</button>
+    </form>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <div class="label">Na garrafa</div>
+      <div class="value"><span id="now">—</span><small>ml</small></div>
+      <div class="levels" id="levels" data-l=""><span></span><span></span><span></span></div>
+      <div class="hint" id="levelText">sem leitura</div>
+    </div>
+    <div class="card">
+      <div class="label">Último gole</div>
+      <div class="value"><span id="last">—</span><small>ml</small></div>
+      <div class="hint" id="lastAgo">&nbsp;</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="feed-head">
+      <div class="label">Atividade</div>
+      <button class="link" id="clearBtn" hidden>Limpar</button>
+    </div>
+    <ul class="feed" id="feed"></ul>
+    <div class="empty" id="feedEmpty">Nenhum evento ainda.</div>
+  </section>
+
+  <section class="connect" id="connectBox">
+    <button class="btn" id="btnBle">Conectar via Bluetooth</button>
+    <button class="btn ghost" id="btnUsb">Conectar via USB</button>
+    <button class="btn ghost" id="btnDemo">Modo demonstração</button>
+    <p class="note" id="supportNote"></p>
+  </section>
+  <section class="connect" id="disconnectBox" hidden>
+    <button class="btn ghost" id="btnOff">Desconectar</button>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  };
+
+  /* ---------- Estado ---------- */
+  const today = () => new Date().toISOString().slice(0, 10);
+  const state = {
+    total: 0,
+    now: null,
+    level: '',
+    lastSip: null,          // { ml, at }
+    goal: store.get('goal', 2000),
+    events: [],             // { type: 'sip'|'refill'|'start', ml, at }
+    lastLineAt: 0,
+    hx711Missing: false,
+  };
+  const saved = store.get('day', null);
+  if (saved && saved.date === today()) {
+    state.events = saved.events || [];
+    const sip = state.events.find(e => e.type === 'sip');
+    if (sip) state.lastSip = sip;
+  }
+  const persist = () => store.set('day', { date: today(), events: state.events.slice(0, 200) });
+
+  /* ---------- Parser da saída Serial do .ino ---------- */
+  const num = (s) => parseFloat(s);
+  const RULES = [
+    [/^Leitura:\s*(-?[\d.]+)\s*ml\s*->\s*(\w+)/i, (m) => {
+      state.hx711Missing = false;
+      const lvl = m[2].toUpperCase();
+      state.level = lvl === 'VAZIO' ? 'VAZIO' : lvl;
+      state.now = lvl === 'VAZIO' ? null : Math.max(0, num(m[1]));
+    }],
+    [/^Total de agua consumida:\s*(-?[\d.]+)/i, (m) => { state.total = Math.max(0, num(m[1])); }],
+    [/^Bebeu:\s*([\d.]+)/i, (m) => addEvent({ type: 'sip', ml: num(m[1]) })],
+    [/^Copo reabastecido/i, () => addEvent({ type: 'refill' })],
+    [/^Peso inicial registrado:\s*(-?[\d.]+)/i, (m) => addEvent({ type: 'start', ml: num(m[1]) })],
+    [/HX711 not found/i, () => { state.hx711Missing = true; state.now = null; state.level = ''; }],
+  ];
+
+  let buf = '';
+  function feed(chunk) {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).replace(/\r$/, '').trim();
+      buf = buf.slice(i + 1);
+      if (line) handleLine(line);
+    }
+    if (buf.length > 2000) buf = '';
+  }
+  function handleLine(line) {
+    state.lastLineAt = Date.now();
+    for (const [re, fn] of RULES) {
+      const m = line.match(re);
+      if (m) { fn(m); break; }
+    }
+    render();
+  }
+  function addEvent(e) {
+    e.at = Date.now();
+    state.events.unshift(e);
+    if (e.type === 'sip') state.lastSip = e;
+    persist();
+  }
+
+  /* ---------- Render ---------- */
+  const C = 2 * Math.PI * 88;
+  $('ringBar').style.strokeDasharray = C;
+  const fmt = (n) => Math.round(n).toLocaleString('pt-BR');
+  const timeOf = (t) => new Date(t).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  function ago(t) {
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return 'agora';
+    const m = Math.round(s / 60);
+    if (m < 60) return `há ${m} min`;
+    const h = Math.floor(m / 60);
+    return `há ${h} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}`;
+  }
+  const LEVEL_TEXT = { VAZIO: 'garrafa fora da base', LEVE: 'nível baixo', MEDIO: 'nível médio', ALTO: 'nível alto' };
+
+  function render() {
+    const pct = Math.min(1, state.total / state.goal);
+    $('ringBar').style.strokeDashoffset = C * (1 - pct);
+    $('total').textContent = fmt(state.total);
+    $('pct').textContent = Math.round((state.total / state.goal) * 100) + '%';
+    $('goalText').textContent = fmt(state.goal) + ' ml';
+
+    $('now').textContent = state.now == null ? '—' : fmt(state.now);
+    $('levels').dataset.l = state.level;
+    $('levelText').textContent = LEVEL_TEXT[state.level] || 'sem leitura';
+
+    $('last').textContent = state.lastSip ? fmt(state.lastSip.ml) : '—';
+    $('lastAgo').innerHTML = state.lastSip ? ago(state.lastSip.at) : '&nbsp;';
+
+    $('alert').hidden = !state.hx711Missing;
+
+    const list = $('feed');
+    list.textContent = '';
+    for (const e of state.events.slice(0, 30)) {
+      const li = document.createElement('li');
+      const left = document.createElement('span');
+      const ic = document.createElement('span');
+      ic.className = 'ic';
+      const t = document.createElement('span');
+      t.className = 't';
+      t.textContent = timeOf(e.at);
+      if (e.type === 'sip')    { ic.textContent = '↓'; left.append(ic, `Bebeu ${fmt(e.ml)} ml`); }
+      if (e.type === 'refill') { ic.textContent = '↑'; left.append(ic, 'Garrafa reabastecida'); }
+      if (e.type === 'start')  { ic.textContent = '•'; left.append(ic, `Peso inicial: ${fmt(e.ml)} ml`); }
+      li.append(left, t);
+      list.append(li);
+    }
+    $('feedEmpty').hidden = state.events.length > 0;
+    $('clearBtn').hidden = state.events.length === 0;
+    renderPill();
+  }
+
+  /* ---------- Meta diária ---------- */
+  $('goalBtn').onclick = () => {
+    $('goalInput').value = state.goal;
+    $('goalForm').hidden = false;
+    $('goalBtn').hidden = true;
+    $('goalInput').focus();
+  };
+  $('goalForm').onsubmit = (ev) => {
+    ev.preventDefault();
+    const v = parseInt($('goalInput').value, 10);
+    if (v >= 100) { state.goal = v; store.set('goal', v); }
+    $('goalForm').hidden = true;
+    $('goalBtn').hidden = false;
+    render();
+  };
+  $('clearBtn').onclick = () => { state.events = []; state.lastSip = null; persist(); render(); };
+
+  /* ---------- Conexões ---------- */
+  let conn = null; // { kind, close() }
+
+  function renderPill() {
+    const pill = $('pill');
+    const stale = conn && Date.now() - state.lastLineAt > 5000;
+    pill.className = 'pill' + (conn ? (stale ? ' stale' : ' on') : '');
+    const names = { usb: 'USB', ble: 'Bluetooth', demo: 'Demo' };
+    $('pillText').textContent = !conn ? 'Desconectado' : stale ? 'Aguardando dados…' : names[conn.kind];
+    $('connectBox').hidden = !!conn;
+    $('disconnectBox').hidden = !conn;
+  }
+  function setConn(c) { conn = c; state.lastLineAt = Date.now(); buf = ''; render(); }
+  function lost() { conn = null; render(); }
+
+  const hasSerial = 'serial' in navigator;
+  const hasBle = 'bluetooth' in navigator;
+  $('btnUsb').disabled = !hasSerial;
+  $('btnBle').disabled = !hasBle;
+  if (!hasSerial || !hasBle) {
+    $('supportNote').textContent = !window.isSecureContext
+      ? 'Abra o app via HTTPS ou localhost para habilitar USB e Bluetooth.'
+      : 'Use o Chrome (Android ou desktop) para USB e Bluetooth.';
+  }
+
+  // USB — Web Serial, 9600 baud como no Serial.begin(9600)
+  $('btnUsb').onclick = async () => {
+    try {
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 9600 });
+      const decoder = new TextDecoderStream();
+      const piped = port.readable.pipeTo(decoder.writable).catch(() => {});
+      const reader = decoder.readable.getReader();
+      let open = true;
+      setConn({
+        kind: 'usb',
+        async close() {
+          open = false;
+          try { await reader.cancel(); } catch {}
+          await piped;
+          try { await port.close(); } catch {}
+        },
+      });
+      (async () => {
+        try {
+          while (open) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) feed(value);
+          }
+        } catch {}
+        if (open) lost();
+      })();
+    } catch (e) { if (e.name !== 'NotFoundError') console.error(e); }
+  };
+
+  // Bluetooth LE — módulos UART transparentes (HM-10 / Nordic UART)
+  const BLE_UARTS = [
+    { svc: '0000ffe0-0000-1000-8000-00805f9b34fb', ch: '0000ffe1-0000-1000-8000-00805f9b34fb' },
+    { svc: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', ch: '6e400003-b5a3-f393-e0a9-e50e24dcca9e' },
+  ];
+  $('btnBle').onclick = async () => {
+    try {
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: BLE_UARTS.map(u => u.svc),
+      });
+      const server = await device.gatt.connect();
+      let ch = null;
+      for (const u of BLE_UARTS) {
+        try { ch = await (await server.getPrimaryService(u.svc)).getCharacteristic(u.ch); break; } catch {}
+      }
+      if (!ch) { device.gatt.disconnect(); alertMsg('Dispositivo sem serviço UART compatível.'); return; }
+      const dec = new TextDecoder();
+      ch.addEventListener('characteristicvaluechanged', (e) => feed(dec.decode(e.target.value, { stream: true })));
+      await ch.startNotifications();
+      let closing = false;
+      device.addEventListener('gattserverdisconnected', () => { if (!closing) lost(); });
+      setConn({ kind: 'ble', async close() { closing = true; device.gatt.disconnect(); } });
+    } catch (e) { if (e.name !== 'NotFoundError') { console.error(e); alertMsg('Falha ao conectar via Bluetooth.'); } }
+  };
+
+  function alertMsg(msg) {
+    const n = $('supportNote');
+    n.textContent = msg;
+  }
+
+  $('btnOff').onclick = async () => { const c = conn; conn = null; render(); if (c) await c.close(); };
+
+  /* ---------- Modo demo: replica a lógica do smartwaterbottle.ino ---------- */
+  $('btnDemo').onclick = () => {
+    const PESO_MINIMO = 250, LIMITE_LEVE = 10000, LIMITE_MEDIO = 25000, VARIACAO_MINIMA = 300, TEMPO_ESTAB = 2000;
+    const paraMl = (p) => p / 100 - 5;
+    let ref = 0, temRef = false, retirado = false, total = 0, ultima = 0, inicio = Date.now();
+    let ml = 450, phase = 'on', ticks = 0;
+    const out = (s) => feed(s + '\n');
+
+    function registrar(peso) {
+      if (peso < PESO_MINIMO || paraMl(peso) < 0) {
+        if (temRef) retirado = true;
+        ultima = peso; inicio = Date.now(); return;
+      }
+      if (Math.abs(peso - ultima) > VARIACAO_MINIMA) inicio = Date.now();
+      ultima = peso;
+      if (Date.now() - inicio < TEMPO_ESTAB) return;
+      if (!temRef) { ref = peso; temRef = true; out(`Peso inicial registrado: ${paraMl(peso).toFixed(2)} ml`); return; }
+      if (!retirado) return;
+      const dif = ref - peso;
+      if (dif > VARIACAO_MINIMA) { const b = dif / 100; total += b; out(`Bebeu: ${b.toFixed(2)} ml`); }
+      else if (dif < -VARIACAO_MINIMA) out('Copo reabastecido');
+      ref = peso; retirado = false;
+    }
+
+    const timer = setInterval(() => {
+      ticks++;
+      if (phase === 'on' && ticks > 14) { phase = 'off'; ticks = 0; }
+      else if (phase === 'off' && ticks > 4) {
+        phase = 'on'; ticks = 0;
+        ml = ml < 120 ? 500 : ml - (25 + Math.random() * 70);
+      }
+      const peso = phase === 'off' ? Math.random() * 40 : (ml + 5) * 100 + (Math.random() - 0.5) * 60;
+      const lvl = peso < PESO_MINIMO ? 'vazio' : peso < LIMITE_LEVE ? 'LEVE' : peso < LIMITE_MEDIO ? 'MEDIO' : 'ALTO';
+      out(`Leitura: ${paraMl(peso).toFixed(2)} ml -> ${lvl}`);
+      registrar(peso);
+      out(`Total de agua consumida: ${total.toFixed(2)} ml`);
+    }, 500);
+    setConn({ kind: 'demo', close() { clearInterval(timer); } });
+  };
+
+  setInterval(render, 2000);
+  render();
+})();
+</script>
+</body>
+</html>
