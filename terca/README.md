@@ -1,3 +1,6 @@
+https://www.mediafire.com/folder/dnub9ourw7tjn/microondas_visao
+
+
 - **Requisitos**
   - Detectar a temperatura da comida dentro do micro-ondas em tempo real por meio de sensor de temperatura.
   - Capturar a imagem da comida e classificar o tipo de alimento para estimar a temperatura-alvo ideal de consumo.
@@ -17,3 +20,4 @@
   - Display legível com atualização em tempo real da temperatura, tipo de alimento e tempo restante.
   - Classificação de imagem capaz de reconhecer os principais tipos de alimento do usuário.
   - Baixo custo de montagem, priorizando componentes acessíveis para o protótipo.
+
